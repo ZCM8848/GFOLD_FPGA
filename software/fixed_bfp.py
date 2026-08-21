@@ -38,7 +38,10 @@ def _blocks_ntau(n, m):
     return bl
 
 
-def solve_bfp(max_iter, mant, interval=10, track=None, eps=1e-4):
+def solve_bfp(max_iter, mant, interval=10, track=None, eps=1e-4,
+              soc_sqrt_p=None, soc_div_p=None, nx_exact=True):
+    from soc_precision import make_proj_dual_cone_q
+    proj_dual = make_proj_dual_cone_q(blocks, soc_sqrt_p, soc_div_p, nx_exact)
     n, m = NV, NR
     l = n + m + 1
     sqrt_l = np.sqrt(l)
@@ -110,7 +113,7 @@ def solve_bfp(max_iter, mant, interval=10, track=None, eps=1e-4):
         u_t[:l - 1] = bfp_q(u_t[:l - 1], mant, blocks_ntau)
 
         u[:] = 2 * u_t - v
-        u[n:l - 1] = bfp_q(_proj_dual_cone_r(u[n:l - 1], diag_r[n:l - 1]), mant,
+        u[n:l - 1] = bfp_q(proj_dual(u[n:l - 1], diag_r[n:l - 1]), mant,
                            [np.arange(0, m)])
         if i < FEAS:
             u[l - 1] = 1.0
