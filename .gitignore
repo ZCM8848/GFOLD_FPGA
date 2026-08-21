@@ -4,6 +4,10 @@ reference/
 # Generated RTL stimulus (regenerable from software/gen_band_data.py)
 rtl/data/
 
+# ModelSim library + transcript (regenerable)
+rtl/sim/work/
+rtl/sim/transcript
+
 # Quartus generated files
 Quartus/db/
 Quartus/output_files/
