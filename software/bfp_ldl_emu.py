@@ -172,7 +172,7 @@ def main():
         except ZeroDivisionError as e:
             print(f"  BFP mant={mant}: DIV-ZERO {e}")
     print("== per-value wide-float ==")
-    for mant in [24, 32, 53]:
+    for mant in [24, 28, 32, 36, 40, 44, 48]:
         for rnd in [False, True]:
             tag = "rnd" if rnd else "trunc"
             try:
