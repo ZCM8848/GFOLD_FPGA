@@ -39,9 +39,14 @@ def _blocks_ntau(n, m):
 
 
 def solve_bfp(max_iter, mant, interval=10, track=None, eps=1e-4,
-              soc_sqrt_p=None, soc_div_p=None, nx_exact=True):
+              soc_sqrt_p=None, soc_div_p=None, nx_exact=True, kkt_noise=0.0,
+              seed=123):
+    """solve_bfp with an optional rel-noise injection on the KKT-solve output
+    (kkt_noise, per-iter multiplicative), to test solver tolerance to banded-LDL
+    arithmetic error. kkt_noise=0 -> identical to the validated solver."""
     from soc_precision import make_proj_dual_cone_q
     proj_dual = make_proj_dual_cone_q(blocks, soc_sqrt_p, soc_div_p, nx_exact)
+    _rng = __import__("numpy").random.default_rng(seed) if kkt_noise > 0 else None
     n, m = NV, NR
     l = n + m + 1
     sqrt_l = np.sqrt(l)
@@ -105,6 +110,8 @@ def solve_bfp(max_iter, mant, interval=10, track=None, eps=1e-4,
         u_t[n:l - 1] = -v[n:l - 1] * diag_r[n:l - 1]
         u_t[l - 1] = v[l - 1]
         u_t[:l - 1] = bfp_q(lu.solve(u_t[:l - 1]), mant, blocks_ntau)
+        if kkt_noise > 0:
+            u_t[:l - 1] *= (1.0 + kkt_noise * _rng.standard_normal(l - 1))
         if i < FEAS:
             u_t[l - 1] = 1.0
         else:
