@@ -93,22 +93,34 @@ module fp32_div(input  wire clk,
     reg [7:0] expo;       // result exponent
     reg sgn;
     reg busy;
+    reg zflag;            // a==0 or b==0 special case -> complete immediately
     wire [24:0] Rsh = {R[23:0], 1'b0};   // shifted remainder (compare against this)
     always @(posedge clk) begin
         if (start) begin
-            it   <= 0; done <= 0; busy <= 1;
+            it   <= 0; done <= 0; busy <= 1; zflag <= 0;
             sgn  <= a[31] ^ b[31];
-            divs <= {1'b1, b[22:0]};
-            if ({1'b1, a[22:0]} >= {1'b1, b[22:0]}) begin
-                divd <= {1'b0, 1'b1, a[22:0]};
-                expo <= a[30:23] - b[30:23] + 8'd127;
+            if (a[30:0] == 0 || b[30:0] == 0) begin
+                // a==0 -> ±0 ;  b==0 (a!=0) -> ±inf ;  0/0 -> ±0
+                zflag <= 1;
+                if (b[30:0] == 0 && a[30:0] != 0)
+                    o <= {a[31] ^ b[31], 8'hFF, 23'h0};   // ±inf
+                else
+                    o <= {a[31] ^ b[31], 31'h0};          // ±0
             end else begin
-                divd <= {1'b1, a[22:0], 1'b0};      // 2*ma
-                expo <= a[30:23] - b[30:23] + 8'd126;  // -1 for the x2
+                divs <= {1'b1, b[22:0]};
+                if ({1'b1, a[22:0]} >= {1'b1, b[22:0]}) begin
+                    divd <= {1'b0, 1'b1, a[22:0]};
+                    expo <= a[30:23] - b[30:23] + 8'd127;
+                end else begin
+                    divd <= {1'b1, a[22:0], 1'b0};      // 2*ma
+                    expo <= a[30:23] - b[30:23] + 8'd126;  // -1 for the x2
+                end
+                R <= 0; Q <= 0;
             end
-            R <= 0; Q <= 0;
         end else if (busy) begin
-            if (it == 5'd0) begin
+            if (zflag) begin
+                done <= 1; busy <= 0; zflag <= 0;
+            end else if (it == 5'd0) begin
                 R <= divd - {1'b0, divs};           // extract leading 1
                 it <= it + 1'b1;
             end else if (it == 5'd24) begin

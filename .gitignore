@@ -7,6 +7,9 @@ rtl/data/
 # ModelSim library + transcript (regenerable)
 rtl/sim/work/
 rtl/sim/transcript
+rtl/sim/full/
+rtl/sim/edge/
+*.mem
 
 # Quartus generated files
 Quartus/db/
