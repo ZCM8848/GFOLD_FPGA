@@ -39,3 +39,5 @@ Cargo.lock
 # OS
 Thumbs.db
 .DS_Store
+rtl/sim/pdcs/
+rtl/sim/pdcf/
