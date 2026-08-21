@@ -13,6 +13,7 @@ rtl/sim/f64s/
 rtl/sim/f64f/
 rtl/sim/rsqrt/
 rtl/sim/psoc/
+rtl/sim/nv/
 *.mem
 
 # Quartus generated files
