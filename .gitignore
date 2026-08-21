@@ -65,3 +65,8 @@ rtl/sim/agmR/
 rtl/sim/ag4.txt
 rtl/sim/ag3.txt
 rtl/data/ag_*.hex
+rtl/sim/an/
+rtl/sim/an_dump.txt
+rtl/sim/an32_dump.txt
+rtl/sim/emu_full.txt
+rtl/sim/emu_out.txt
