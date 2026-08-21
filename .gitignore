@@ -41,3 +41,7 @@ Thumbs.db
 .DS_Store
 rtl/sim/pdcs/
 rtl/sim/pdcf/
+rtl/sim/aa/
+rtl/data/aa_*.hex
+data/
+Quartus/*.qws
