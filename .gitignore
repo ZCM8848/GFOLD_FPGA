@@ -45,3 +45,6 @@ rtl/sim/aa/
 rtl/data/aa_*.hex
 data/
 Quartus/*.qws
+rtl/sim/ch/
+rtl/sim/chol_dump.txt
+rtl/data/chol_*.hex
