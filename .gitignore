@@ -1,0 +1,24 @@
+# Third-party reference repos (cloned separately; see README)
+reference/
+
+# Quartus generated files
+Quartus/db/
+Quartus/output_files/
+Quartus/*.qdf
+Quartus/incremental_db/
+Quartus/*.sld
+Quartus/*.pin
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Rust (the g-fold source is cloned separately in reference/hermes_ws, not here)
+target/
+Cargo.lock
+
+# OS
+Thumbs.db
+.DS_Store
