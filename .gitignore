@@ -1,6 +1,9 @@
 # Third-party reference repos (cloned separately; see README)
 reference/
 
+# Generated RTL stimulus (regenerable from software/gen_band_data.py)
+rtl/data/
+
 # Quartus generated files
 Quartus/db/
 Quartus/output_files/
