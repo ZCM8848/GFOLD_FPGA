@@ -88,3 +88,12 @@ rtl/sim/ldlrb_dump.txt
 rtl/sim/sbs/
 rtl/sim/sbsf/
 rtl/sim/sbuild_dump.txt
+rtl/sim/drsi/
+rtl/sim/pdcrb/
+rtl/sim/pdc_rb_out.hex
+rtl/sim/run_fp64.do
+rtl/sim/run_ldl_debug.do
+rtl/tb_ldl_debug.v
+rtl/transcript
+software/run_sens20k.py
+software/run_sens_3e5.py
