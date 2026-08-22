@@ -1,18 +1,23 @@
 `timescale 1ns/1ps
 // banded_ldl_fp64_rb: Stage-B banded LDL^T solver, IEEE-754 FP64, with RUNTIME
-// BAND INPUT (Phase 2 — the refactorizable LDL). Same FSM/arithmetic as the
-// validated banded_ldl_fp64_rt; the only change: the S band is STREAMED IN
-// ((HB+1)*N words on band_valid) instead of loaded via $readmemh, so the
-// adaptive-scaling / adaptive-TOF loop can re-factorize with a freshly built
-// S band (Phase 3 s_build) every scale change / tof candidate.
-// Protocol: pulse start, stream (HB+1)*N band words (band_valid, 1/cycle),
-// then N rhs words (rhs_valid, 1/cycle). Solve is self-timed; then N zx words
-// stream out (zx_valid, 1/cycle), then done pulses.
+// BAND INPUT + REFACTOR MODE (Phase 2 + 4b). Same FSM/arithmetic as the
+// validated banded_ldl_fp64_rt; the changes: the S band is STREAMED IN
+// ((HB+1)*N words on band_valid) instead of $readmemh, and `refactor`
+// selects between:
+//   refactor=1: stream band -> factorize -> fwd/back (full re-factorization,
+//               for scale changes / tof candidates)
+//   refactor=0: skip band + factorization, use the L/D ALREADY in B[] from a
+//               previous refactor=1 run, straight to fwd/back (the per-iteration
+//               solve in SCS — the DRS loop only re-factorizes on scale change)
+// Protocol: pulse start with refactor held; if refactor=1 stream (HB+1)*N
+// band words (band_valid, 1/cycle); then N rhs words (rhs_valid, 1/cycle);
+// self-timed solve; N zx words out (zx_valid, 1/cycle); done pulses.
 module banded_ldl_fp64_rb #(parameter N = 8, HB = 2) (
     input  wire       clk,
     input  wire       rst_n,
     input  wire       start,
-    // runtime band input (streamed)
+    input  wire       refactor,     // 1: re-factorize (stream band); 0: reuse L/D
+    // runtime band input (streamed, only when refactor=1)
     input  wire [63:0] band_in,
     input  wire        band_valid,
     // runtime rhs input (streamed)
@@ -75,7 +80,11 @@ module banded_ldl_fp64_rb #(parameter N = 8, HB = 2) (
             case (st)
             S_IDLE: begin
                 done <= 0;
-                if (start) begin wp <= 0; st <= S_BAND; end
+                if (start) begin
+                    wp <= 0;
+                    if (refactor) st <= S_BAND;
+                    else begin k <= 0; st <= S_RHS; end
+                end
             end
             // ---- stream (HB+1)*N band words into B[] (sequential write) ----
             S_BAND: begin
@@ -89,8 +98,11 @@ module banded_ldl_fp64_rb #(parameter N = 8, HB = 2) (
             S_RHS: begin
                 if (rhs_valid) begin
                     rhs[wp] <= rhs_in;
-                    if (wp + 1 >= N) begin k <= 0; st <= S_SETUP; end
-                    else wp <= wp + 1;
+                    if (wp + 1 >= N) begin
+                        k <= 0;
+                        if (refactor) st <= S_SETUP;   // factorize (band fresh)
+                        else st <= S_FWD_E;            // reuse L/D from last factor
+                    end else wp <= wp + 1;
                 end
             end
             S_SETUP: begin d <= B[k*(HB+1)]; i_off <= 1; st <= S_TDIV_ST; end

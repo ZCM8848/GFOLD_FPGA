@@ -33,9 +33,11 @@ module kkt_solve #(
     parameter DY_FILE   = "../data/kkt/small/Dy.hex"
 )(
     input  wire          clk, rst_n, start,
-    // runtime band input (streamed, (HB+1)*N words)
+    // runtime band input (streamed, (HB+1)*N words; only when refactor=1)
     input  wire [63:0]   band_in,
     input  wire          band_valid,
+    // 1: stream band + re-factorize (scale change); 0: reuse last L/D (per-iter)
+    input  wire          refactor,
     input  wire [63:0]   x_in,
     input  wire          din_valid,
     // shared external RAM port (sync write, async read)
@@ -94,7 +96,7 @@ module kkt_solve #(
     wire [63:0] ldl_zx_out;
     wire        ldl_zx_valid, ldl_done_w;
     banded_ldl_fp64_rb #(.N(N), .HB(HB)) u_ldl(
-        .clk(clk), .rst_n(rst_n), .start(ldl_start),
+        .clk(clk), .rst_n(rst_n), .start(ldl_start), .refactor(refactor),
         .band_in(ldl_band_in), .band_valid(ldl_band_valid),
         .rhs_in(ldl_rhs_in), .rhs_valid(ldl_rhs_valid),
         .zx_out(ldl_zx_out), .zx_valid(ldl_zx_valid), .done(ldl_done_w), .status());
@@ -162,8 +164,12 @@ module kkt_solve #(
                 done <= 0;
                 if (start) begin ldl_start <= 1; wp <= 0; st <= S_BANDSTART; end
             end
-            // ---- pulse LDL start, then stream (HB+1)*N band words into it ----
-            S_BANDSTART: begin ldl_start <= 0; st <= S_BAND; end
+            // ---- pulse LDL start, then stream (HB+1)*N band words into it
+            //      (refactor=1) or skip straight to vx (refactor=0: reuse L/D) ----
+            S_BANDSTART: begin
+                ldl_start <= 0;
+                if (refactor) st <= S_BAND; else st <= S_VX;
+            end
             S_BAND: begin
                 if (band_valid) begin
                     ldl_band_valid <= 1; ldl_band_in <= band_in;
