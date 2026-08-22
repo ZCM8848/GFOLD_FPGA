@@ -74,3 +74,9 @@ rtl/sim/ldlrt/
 rtl/sim/ldlrtf/
 rtl/sim/ldlrt_small.txt
 rtl/sim/ldlrt_full.txt
+rtl/sim/spmvl/
+rtl/sim/sp1/
+rtl/sim/spmv_dump.txt
+rtl/sim/sp1_dump.txt
+rtl/sim/kkt/
+rtl/sim/kkt_dump.txt
