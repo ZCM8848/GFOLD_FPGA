@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
-// TB for kkt_solve: stream vx (N) + vy (M), capture zx (N) + zy (M) output
-// stream, print "CASE 0: ..." for software/check_kkt.py.
+// TB for kkt_solve: stream band ((HB+1)*N) + vx (N) + vy (M), capture
+// zx (N) + zy (M) output stream, print "CASE 0: ..." for check_kkt.py.
 // WHICH=0 -> small (n10/m20/hb4), WHICH=1 -> full (n1100/m2107/hb17).
 // Literal filenames via case(WHICH) — $sformatf hangs ModelSim 10.5b.
 module tb_kkt_solve;
@@ -10,22 +10,24 @@ module tb_kkt_solve;
     parameter AVAL_FILE = "../data/kkt/small/Aval.hex";
     parameter RY_FILE   = "../data/kkt/small/r_y.hex";
     parameter DY_FILE   = "../data/kkt/small/Dy.hex";
-    parameter BAND_FILE = "../data/kkt/small/band_f64.hex";
     reg clk = 0, rst_n = 0;
     always #5 clk = ~clk;
-    reg start = 0, dv = 0; reg [63:0] xin;
+    reg start = 0, bv = 0, dv = 0; reg [63:0] band_in, xin;
     wire [63:0] z_out; wire o_valid, done;
     wire [13:0] ram_addr; wire [63:0] ram_wdata; wire ram_we; wire [63:0] ram_rdata;
     kkt_solve #(.N(N),.M(M),.NNZ(NNZ),.HB(HB),
                 .AROW_FILE(AROW_FILE),.ACOL_FILE(ACOL_FILE),.AVAL_FILE(AVAL_FILE),
-                .RY_FILE(RY_FILE),.DY_FILE(DY_FILE),.BAND_FILE(BAND_FILE)) dut(
-        .clk(clk),.rst_n(rst_n),.start(start),.x_in(xin),.din_valid(dv),
+                .RY_FILE(RY_FILE),.DY_FILE(DY_FILE)) dut(
+        .clk(clk),.rst_n(rst_n),.start(start),
+        .band_in(band_in),.band_valid(bv),
+        .x_in(xin),.din_valid(dv),
         .ram_addr(ram_addr),.ram_wdata(ram_wdata),.ram_we(ram_we),.ram_rdata(ram_rdata),
         .z_out(z_out),.o_valid(o_valid),.done(done));
     reg [63:0] mem [0:16383];
     always @(posedge clk) if (ram_we) mem[ram_addr] <= ram_wdata;
     assign ram_rdata = mem[ram_addr];
 
+    reg [63:0] band [0:32767];
     reg [63:0] vx [0:4095], vy [0:4095], got [0:4095];
     integer k, cnt;
     reg watchdog = 0;
@@ -33,17 +35,21 @@ module tb_kkt_solve;
     initial begin
         case (WHICH)
             0: begin
+                $readmemh("../data/kkt/small/band_f64.hex", band);
                 $readmemh("../data/kkt/small/vx.hex", vx);
                 $readmemh("../data/kkt/small/vy.hex", vy);
             end
             1: begin
+                $readmemh("../data/kkt/full/band_f64.hex", band);
                 $readmemh("../data/kkt/full/vx.hex", vx);
                 $readmemh("../data/kkt/full/vy.hex", vy);
             end
         endcase
         rst_n = 0; repeat (4) @(negedge clk); rst_n = 1;
-        @(negedge clk); start = 1; dv = 0;
+        @(negedge clk); start = 1; bv = 0; dv = 0;
         @(negedge clk); start = 0;
+        for (k = 0; k < (HB+1)*N; k = k + 1) begin @(negedge clk); band_in = band[k]; bv = 1; end
+        @(negedge clk); bv = 0;
         for (k = 0; k < N; k = k + 1) begin @(negedge clk); xin = vx[k]; dv = 1; end
         for (k = 0; k < M; k = k + 1) begin @(negedge clk); xin = vy[k]; dv = 1; end
         @(negedge clk); dv = 0;

@@ -1,10 +1,13 @@
 `timescale 1ns/1ps
-// kkt_solve: complete Schur block-elimination KKT solve (Phase 1d/1e glue).
-// Given iterate v_x (N), v_y (M), static r_y/D_y/S-band, computes the KKT solve
+// kkt_solve: complete Schur block-elimination KKT solve (Phase 1d/1e + 4a).
+// Given iterate v_x (N), v_y (M), static r_y/D_y, computes the KKT solve
 //   S z_x = rho_x v_x - A^T v_y          (S = rho_x I + A^T D_y A, banded LDL^T)
 //   z_y   = D_y (A z_x + r_y v_y)
 // by chaining the validated blocks: 2x spmv_fp64 (A^T and A) + 1x
-// banded_ldl_fp64_rt, orchestrated by this FSM. All arithmetic IEEE-754 FP64.
+// banded_ldl_fp64_rb, orchestrated by this FSM. All arithmetic IEEE-754 FP64.
+// Phase 4a: the S band is now STREAMED IN (band_in/band_valid, (HB+1)*N words)
+// instead of $readmemh — the band can come from s_build at runtime, so the
+// adaptive-scaling loop can re-factorize with a rebuilt S (new D_y).
 //
 // RAM-port design (proj_dual_cone / spmv pattern): one shared external RAM
 // (sync write, async read) holds all state vectors. Address map (LMAX=max(N,M)):
@@ -16,9 +19,10 @@
 // BASE1=0 so its addresses pass through untouched (its 13-bit ram_addr is fine:
 // max 2*LMAX-1 = 4213 < 8192; the mux widens to RAM_AW=14).
 //
-// Protocol: pulse start, stream N vx words then M vy words (din_valid, 1/cycle),
-// wait done. On completion, N zx words then M zy words stream out on z_out
-// (o_valid, 1/cycle), then done pulses.
+// Protocol: pulse start, stream (HB+1)*N band words (band_valid, 1/cycle),
+// then N vx words then M vy words (din_valid, 1/cycle), wait done. On
+// completion, N zx words then M zy words stream out on z_out (o_valid, 1/cycle),
+// then done pulses.
 module kkt_solve #(
     parameter N = 10, M = 20, NNZ = 41, HB = 4,
     parameter RAM_AW = 14,
@@ -26,10 +30,12 @@ module kkt_solve #(
     parameter ACOL_FILE = "../data/kkt/small/Acol.hex",
     parameter AVAL_FILE = "../data/kkt/small/Aval.hex",
     parameter RY_FILE   = "../data/kkt/small/r_y.hex",
-    parameter DY_FILE   = "../data/kkt/small/Dy.hex",
-    parameter BAND_FILE = "../data/kkt/small/band_f64.hex"
+    parameter DY_FILE   = "../data/kkt/small/Dy.hex"
 )(
     input  wire          clk, rst_n, start,
+    // runtime band input (streamed, (HB+1)*N words)
+    input  wire [63:0]   band_in,
+    input  wire          band_valid,
     input  wire [63:0]   x_in,
     input  wire          din_valid,
     // shared external RAM port (sync write, async read)
@@ -83,12 +89,13 @@ module kkt_solve #(
         .ram_addr(sp2_addr), .ram_wdata(sp2_wdata), .ram_we(sp2_we),
         .ram_rdata(ram_rdata), .out_out(), .o_valid(), .done(sp2_done_w));
 
-    reg  ldl_start, ldl_rhs_valid;
-    reg  [63:0] ldl_rhs_in;
+    reg  ldl_start, ldl_band_valid, ldl_rhs_valid;
+    reg  [63:0] ldl_band_in, ldl_rhs_in;
     wire [63:0] ldl_zx_out;
     wire        ldl_zx_valid, ldl_done_w;
-    banded_ldl_fp64_rt #(.N(N), .HB(HB), .BAND_FILE(BAND_FILE)) u_ldl(
+    banded_ldl_fp64_rb #(.N(N), .HB(HB)) u_ldl(
         .clk(clk), .rst_n(rst_n), .start(ldl_start),
+        .band_in(ldl_band_in), .band_valid(ldl_band_valid),
         .rhs_in(ldl_rhs_in), .rhs_valid(ldl_rhs_valid),
         .zx_out(ldl_zx_out), .zx_valid(ldl_zx_valid), .done(ldl_done_w), .status());
 
@@ -106,12 +113,12 @@ module kkt_solve #(
     fp64_mul um_zy2(dy_reg, so_zy1, po_zy2);
 
     // ---- RAM port mux: spmv1 (BASE1=0) | spmv2 (BASE2=2*LMAX) | own ----
-    localparam S_IDLE=0, S_VX=1, S_VXW=2, S_VY=3, S_SP1WAIT=4,
-               S_LDLSTART=5, S_RHS0=6, S_RHS1=7, S_RHS2=8, S_RHS3=9,
-               S_ZCAP=10, S_ZCAPDONE=11,
-               S_SP2START=12, S_SP2FEED=13, S_SP2WAIT=14,
-               S_ZY0=15, S_ZY1=16, S_ZY2=17, S_ZY3=18, S_ZY4=19,
-               S_ZOUT0=20, S_ZOUT1=21, S_ZYOUT0=22, S_ZYOUT1=23, S_DONE=24;
+    localparam S_IDLE=0, S_BANDSTART=1, S_BAND=2, S_VX=3, S_VXW=4, S_VY=5,
+               S_SP1WAIT=6, S_RHS0=7, S_RHS1=8, S_RHS2=9, S_RHS3=10,
+               S_ZCAP=11, S_ZCAPDONE=12,
+               S_SP2START=13, S_SP2FEED=14, S_SP2WAIT=15,
+               S_ZY0=16, S_ZY1=17, S_ZY2=18, S_ZY3=19, S_ZY4=20,
+               S_ZOUT0=21, S_ZOUT1=22, S_ZYOUT0=23, S_ZYOUT1=24, S_DONE=25;
     reg [4:0] st;
     reg [15:0] wp, i, r, zo;
     wire sp1_own = (st == S_VY || st == S_SP1WAIT);
@@ -141,17 +148,28 @@ module kkt_solve #(
             own_addr <= 0; own_wdata <= 0; own_we <= 0;
             sp1_start <= 0; sp1_din_valid <= 0; sp1_x_in <= 0;
             sp2_start <= 0; sp2_din_valid <= 0; sp2_x_in <= 0;
-            ldl_start <= 0; ldl_rhs_valid <= 0; ldl_rhs_in <= 0;
+            ldl_start <= 0; ldl_band_valid <= 0; ldl_band_in <= 0;
+            ldl_rhs_valid <= 0; ldl_rhs_in <= 0;
             z_out <= 0; wp <= 0; i <= 0; r <= 0; zo <= 0;
             vx_i <= 0; atvy_i <= 0; az_r <= 0; vy_r <= 0;
             ry_reg <= 0; dy_reg <= 0;
         end else begin
             o_valid <= 0; own_we <= 0;
-            sp1_din_valid <= 0; sp2_din_valid <= 0; ldl_rhs_valid <= 0;
+            sp1_din_valid <= 0; sp2_din_valid <= 0; ldl_band_valid <= 0;
+            ldl_rhs_valid <= 0;
             case (st)
             S_IDLE: begin
                 done <= 0;
-                if (start) begin wp <= 0; st <= S_VX; end
+                if (start) begin ldl_start <= 1; wp <= 0; st <= S_BANDSTART; end
+            end
+            // ---- pulse LDL start, then stream (HB+1)*N band words into it ----
+            S_BANDSTART: begin ldl_start <= 0; st <= S_BAND; end
+            S_BAND: begin
+                if (band_valid) begin
+                    ldl_band_valid <= 1; ldl_band_in <= band_in;
+                    if (wp + 1 >= (HB+1)*N) begin wp <= 0; st <= S_VX; end
+                    else wp <= wp + 1;
+                end
             end
             // ---- stream N vx words into RAM[AD_VX + wp] ----
             S_VX: begin
@@ -185,11 +203,11 @@ module kkt_solve #(
                     else wp <= wp + 1;
                 end
             end
-            // ---- wait A^T vy done (spmv1 wrote it to RAM[LMAX..LMAX+N)) ----
+            // ---- wait A^T vy done (spmv1 wrote it to RAM[LMAX..LMAX+N));
+            //      LDL already got start + band, now waiting in S_RHS ----
             S_SP1WAIT: begin
-                if (sp1_done_w) begin ldl_start <= 1; st <= S_LDLSTART; end
+                if (sp1_done_w) begin i <= 0; st <= S_RHS0; end
             end
-            S_LDLSTART: begin ldl_start <= 0; i <= 0; st <= S_RHS0; end
             // ---- stream rhs_x[i] = rho_x*vx[i] - A^Tvy[i] into LDL, 4 cyc/elem ----
             S_RHS0: begin own_addr <= AD_VX + i; st <= S_RHS1; end
             S_RHS1: begin vx_i <= ram_rdata; own_addr <= AD_ATVY + i; st <= S_RHS2; end
