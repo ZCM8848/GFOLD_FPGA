@@ -82,3 +82,9 @@ rtl/sim/kkt/
 rtl/sim/kkts/
 rtl/sim/kktf/
 rtl/sim/kkt_dump.txt
+rtl/sim/ldlrb/
+rtl/sim/ldlrbf/
+rtl/sim/ldlrb_dump.txt
+rtl/sim/sbs/
+rtl/sim/sbsf/
+rtl/sim/sbuild_dump.txt
