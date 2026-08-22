@@ -115,12 +115,12 @@ module kkt_solve #(
     fp64_mul um_zy2(dy_reg, so_zy1, po_zy2);
 
     // ---- RAM port mux: spmv1 (BASE1=0) | spmv2 (BASE2=2*LMAX) | own ----
-    localparam S_IDLE=0, S_BANDSTART=1, S_BAND=2, S_VX=3, S_VXW=4, S_VY=5,
-               S_SP1WAIT=6, S_RHS0=7, S_RHS1=8, S_RHS2=9, S_RHS3=10,
-               S_ZCAP=11, S_ZCAPDONE=12,
-               S_SP2START=13, S_SP2FEED=14, S_SP2WAIT=15,
-               S_ZY0=16, S_ZY1=17, S_ZY2=18, S_ZY3=19, S_ZY4=20,
-               S_ZOUT0=21, S_ZOUT1=22, S_ZYOUT0=23, S_ZYOUT1=24, S_DONE=25;
+    localparam S_IDLE=0, S_BAND=1, S_VX=2, S_VXW=3, S_VY=4,
+               S_SP1WAIT=5, S_RHS0=6, S_RHS1=7, S_RHS2=8, S_RHS3=9,
+               S_ZCAP=10, S_ZCAPDONE=11,
+               S_SP2START=12, S_SP2FEED=13, S_SP2WAIT=14,
+               S_ZY0=15, S_ZY1=16, S_ZY2=17, S_ZY3=18, S_ZY4=19,
+               S_ZOUT0=20, S_ZOUT1=21, S_ZYOUT0=22, S_ZYOUT1=23, S_DONE=24;
     reg [4:0] st;
     reg [15:0] wp, i, r, zo;
     wire sp1_own = (st == S_VY || st == S_SP1WAIT);
@@ -158,18 +158,20 @@ module kkt_solve #(
         end else begin
             o_valid <= 0; own_we <= 0;
             sp1_din_valid <= 0; sp2_din_valid <= 0; ldl_band_valid <= 0;
-            ldl_rhs_valid <= 0;
+            ldl_rhs_valid <= 0; ldl_start <= 0;
             case (st)
             S_IDLE: begin
                 done <= 0;
-                if (start) begin ldl_start <= 1; wp <= 0; st <= S_BANDSTART; end
+                if (start) begin
+                    ldl_start <= 1; wp <= 0;
+                    // direct to S_BAND/S_VX (no intermediate state): the caller
+                    // forwards band/vx/vy with a 1-cycle register delay, so the
+                    // first word must be sampled here 1 cycle after start —
+                    // an extra state would misalign values AND the word count.
+                    if (refactor) st <= S_BAND; else st <= S_VX;
+                end
             end
-            // ---- pulse LDL start, then stream (HB+1)*N band words into it
-            //      (refactor=1) or skip straight to vx (refactor=0: reuse L/D) ----
-            S_BANDSTART: begin
-                ldl_start <= 0;
-                if (refactor) st <= S_BAND; else st <= S_VX;
-            end
+            // ---- stream (HB+1)*N band words into LDL (only when refactor=1) ----
             S_BAND: begin
                 if (band_valid) begin
                     ldl_band_valid <= 1; ldl_band_in <= band_in;

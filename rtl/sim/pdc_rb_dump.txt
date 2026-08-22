@@ -1,0 +1,47 @@
+Reading D:/intelFPGA/18.1/modelsim_ase/tcl/vsim/pref.tcl
+
+# 10.5b
+
+# do run_pdc_rb.do
+# ** Warning: (vlib-34) Library already exists at "pdcrb".
+# Model Technology ModelSim - Intel FPGA Edition vlog 10.5b Compiler 2016.10 Oct  5 2016
+# Start time: 21:29:12 on Aug 22,2026
+# vlog -work pdcrb ../fp64.v ../fp64_rsqrt.v ../fp64_cmp.v ../proj_soc.v ../proj_dual_cone_rb.v ../tb_proj_dual_cone_rb.v 
+# -- Compiling module fp64_mul
+# -- Compiling module fp64_add
+# -- Compiling module fp64_div
+# -- Compiling module fp64_rsqrt
+# -- Compiling module fp64_cmp
+# -- Compiling module proj_soc
+# -- Compiling module proj_dual_cone_rb
+# -- Compiling module tb_proj_dual_cone_rb
+# 
+# Top level modules:
+# 	fp64_div
+# 	tb_proj_dual_cone_rb
+# End time: 21:29:12 on Aug 22,2026, Elapsed time: 0:00:00
+# Errors: 0, Warnings: 0
+# vsim -c pdcrb.tb_proj_dual_cone_rb 
+# Start time: 21:29:12 on Aug 22,2026
+# Loading pdcrb.tb_proj_dual_cone_rb
+# Loading pdcrb.proj_dual_cone_rb
+# Loading pdcrb.proj_soc
+# Loading pdcrb.fp64_rsqrt
+# Loading pdcrb.fp64_mul
+# Loading pdcrb.fp64_add
+# Loading pdcrb.fp64_cmp
+# loaded ../data/kkt/full/pdc_in.hex (2107 rows)
+# DBG S_SRD row=2083 b=2 node=98
+# DBG S_OW row=2083 b=2 node=98
+# DBG S_SRD row=2089 b=0 node=99
+# DBG S_OW row=2089 b=0 node=99
+# DBG S_SRD row=2093 b=1 node=99
+# DBG S_OW row=2093 b=1 node=99
+# DBG S_SRD row=2097 b=2 node=99
+# DBG S_OW row=2097 b=2 node=99
+# DONE
+# wrote pdc_rb_out.hex
+# ** Note: $finish    : ../tb_proj_dual_cone_rb.v(55)
+#    Time: 96515 ns  Iteration: 1  Instance: /tb_proj_dual_cone_rb
+# End time: 21:29:13 on Aug 22,2026, Elapsed time: 0:00:01
+# Errors: 0, Warnings: 0
