@@ -130,7 +130,7 @@ def build_diag_r(scale, n, m, rp):
     return diag_r
 
 
-def one_iteration(A, br, cr, blocks, scale, diag_r, lu, g, v, v_prev, i, aa):
+def one_iteration(A, br, cr, blocks, scale, diag_r, lu, g, v, v_prev, i, aa, safeguard=True):
     """One full DRS iteration on the reordered problem. Returns (v, u_t, u, rsk).
     Mirrors scs_adaptive.solve_adaptive's loop body EXACTLY (AA/normalize
     included for i>0). This is the RTL oracle for drs_iter."""
@@ -167,12 +167,12 @@ def one_iteration(A, br, cr, blocks, scale, diag_r, lu, g, v, v_prev, i, aa):
     # update_dual_vars
     v += ALPHA * (u - u_t)
     # AA safeguard
-    if i % 10 == 0:
+    if safeguard and i % 10 == 0:
         aa.safeguard(v, v_prev)
     return v, u_t, u, rsk
 
 
-def solve(max_iter, eps=1e-4, adaptive_scale=True, interval=10, track=None):
+def solve(max_iter, eps=1e-4, adaptive_scale=True, interval=10, track=None, safeguard=True):
     """Full run on the reordered problem; returns result dict (scs_adaptive shape)."""
     Ab, br, cr, rp, cp, blocks = reorder_problem()
     n, m = Ab.shape[1], Ab.shape[0]
@@ -197,7 +197,7 @@ def solve(max_iter, eps=1e-4, adaptive_scale=True, interval=10, track=None):
     def safediv(x, y): return x / y if y > DIV_EPS else x / DIV_EPS
     for i in range(max_iter):
         v, u_t, u, rsk = one_iteration(Ab, br, cr, blocks, scale, diag_r, lu, g,
-                                       v, v_prev, i, aa)
+                                       v, v_prev, i, aa, safeguard=safeguard)
         if i % CONVERGED_INTERVAL == 0:
             tau = abs(u[l - 1]); kap = abs(rsk[l - 1])
             x_ = u[:n]; y_ = u[n:l - 1]; s_ = rsk[n:l - 1]

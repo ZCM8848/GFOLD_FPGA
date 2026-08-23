@@ -57,6 +57,10 @@ module drs_iter #(
     localparam RSK_BASE= 3 * L;
     localparam G_BASE  = 4 * L;
     localparam DR_BASE = 4 * L + LM1;
+    localparam VPR_BASE= 5 * L + LM1;      // v_prev (AA apply input x)
+    localparam SAFEV_BASE = 6 * L + LM1;   // v before AA (apply input f backup)
+    localparam SAFEVP_BASE = 7 * L + LM1;  // v_prev before AA (apply input x backup)
+    localparam AA_SAFEGUARD = 64'h3FF0000000000000;  // 1.0 (scs_faithful AA_SAFEGUARD)
 
     // ---- sub-blocks ----
     reg  ks_start, ks_band_valid, ks_din_valid;
@@ -90,6 +94,23 @@ module drs_iter #(
     proj_dual_cone_rb u_pdc(.clk(clk), .rst_n(rst_n), .start(pdc_start),
         .addr(pdc_addr), .wdata(pdc_wdata), .we(pdc_we), .rdata(pdc_rdata),
         .done(pdc_done));
+
+    // ---- Anderson accelerator (apply call: x=v_prev, f=v; f_out = accel f) ----
+    reg  aa_start, aa_dv;
+    reg  [63:0] aa_x, aa_f;
+    wire aa_rdy;
+    wire [63:0] aa_fout;
+    wire aa_o_valid, aa_done;
+    anderson #(.DIM(L), .MEM(10)) u_aa(.clk(clk), .rst_n(rst_n), .start(aa_start),
+        .x_in(aa_x), .f_in(aa_f), .din_valid(aa_dv), .rdy(aa_rdy),
+        .f_out(aa_fout), .o_valid(aa_o_valid), .done(aa_done));
+    // AA round: iter>0 and iter%10==0
+    wire aa_round = (iter != 0) && (iter % 10 == 0);
+    // FP64 comparison (a > b), combinational, no NaN/denormal handling needed here
+    reg  [63:0] cmp_a, cmp_b;
+    wire cmp_gt = (cmp_a[63] != cmp_b[63]) ? (~cmp_a[63]) :
+                  (cmp_a[63] == 0) ? ((cmp_a[62:0] > cmp_b[62:0]) ? 1'b1 : 1'b0) :
+                                     ((cmp_a[62:0] < cmp_b[62:0]) ? 1'b1 : 1'b0);
 
     // ---- own FP64 combinational pool ----
     reg [63:0] a1, b1;
@@ -129,10 +150,22 @@ module drs_iter #(
  S_RSK0=48, S_RSK1=49, S_RSK2=50, S_RSK3=51, S_RSK4=52,
  S_RSK5=53, S_RSK6=54, S_RSK7=55, S_RSK8=56, S_RSK9=57,
  S_V0=58, S_V1=59, S_V2=60, S_V3=61, S_V4=62, S_V5=63,
- S_V6=64, S_V7=65, S_DONE=66;
-    reg [6:0] st;   // 0..66 fits in 7 bits
-    reg [15:0] i;
-    reg [63:0] vv, utv, gv, drv, tau_r, norm_r, sqacc, v_eta;
+ S_V6=64, S_V7=65, S_DONE=66,
+ S_AA0=69, S_AA1=70, S_AA2=71, S_AA3=72, S_AA4=73, S_AA5=74,
+ S_AA6=75, S_AA7=76, S_AA8=77, S_AA9=78, S_AA10=79, S_AAW=80,
+ S_VPC0=81, S_VPC1=82, S_VPC2=83, S_VPC3=84,
+ S_SG0=85, S_SG1=86, S_SG2=87, S_SG3=88, S_SG4=89, S_SG5=90,
+ S_SG6=91, S_SG7=92, S_SG8=93, S_SG9=94,
+ S_SC0=95, S_SC1=96, S_SC2=97, S_SC3=98,
+ S_SCP0=99, S_SCP1=100, S_SCP2=101, S_SCP3=102;
+ reg [6:0] st;   // 0..102 fits in 7 bits
+ reg [15:0] i;
+ reg [63:0] vv, utv, gv, drv, tau_r, norm_r, sqacc, v_eta;
+ reg [63:0] gacc, norm_g_r, aa_xr, aa_fr;
+ reg sflag;
+ reg aa_done_r;
+ reg rs_done_p, rs_rise;
+ reg [15:0] aa_cnt;
     wire pdc_own = (st == S_CONE || st == S_CONEW);
     always @* begin
         if (pdc_own) begin
@@ -161,20 +194,26 @@ module drs_iter #(
             rs_start <= 0; rs_in <= 0;
             i <= 0; vv <= 0; utv <= 0; gv <= 0; drv <= 0;
             tau_r <= 0; norm_r <= 0; sqacc <= 0; v_eta <= 0;
+            aa_start <= 0; aa_dv <= 0; aa_x <= 0; aa_f <= 0;
+            gacc <= 0; norm_g_r <= 0; aa_xr <= 0; aa_fr <= 0; sflag <= 0;
+            cmp_a <= 0; cmp_b <= 0; aa_done_r <= 0;
+            rs_done_p <= 0; rs_rise <= 0; aa_cnt <= 0;
         end else begin
             ks_start <= 0; ks_band_valid <= 0; ks_din_valid <= 0;
             rp_start <= 0; rp_dv <= 0; pdc_start <= 0; rs_start <= 0;
+            aa_start <= 0; aa_dv <= 0;
             own_we <= 0;
             case (st)
             S_IDLE: begin
                 done <= 0;
                 if (start) begin
-                    if (iter == 0) st <= S_KSSTART;   // FEAS: skip normalize
+                    if (iter == 0) begin i <= 0; own_addr <= V_BASE; st <= S_VPC0; end  // FEAS: v_prev=v0, no normalize
+                    else if (aa_round) begin i <= 0; own_addr <= VPR_BASE; st <= S_AA0; end  // AA apply first
                     else begin i <= 0; own_addr <= V_BASE; st <= S_NM0; end
                 end
             end
             // ============ normalize v (iter>=1): pass1 ||v||, pass2 scale ====
-            S_NM0: begin i <= 0; own_addr <= V_BASE; st <= S_NM1; end
+            S_NM0: begin i <= 0; sqacc <= 0; own_addr <= V_BASE; st <= S_NM1; end
             S_NM1: begin
                 vv <= ram_rdata; own_addr <= V_BASE + i + 1; st <= S_NM2;
             end
@@ -193,7 +232,11 @@ module drs_iter #(
                 sqacc <= so1; rs_start <= 1; rs_in <= so1; st <= S_NMRW;
             end
             S_NMRW: begin
-                if (rs_done) begin a1 <= SQRT_L; b1 <= rs_o; st <= S_NMRX; end
+                // rs_done RISING-EDGE only: the residue from the previous
+                // normalize (iter>=1) would otherwise exit on cycle 1 with the
+                // STALE rs_o (norm_r = previous iteration's scale).
+                rs_done_p <= rs_done;
+                if (rs_done && !rs_done_p) begin a1 <= SQRT_L; b1 <= rs_o; st <= S_NMRX; end
             end
             S_NMRX: begin norm_r <= po1; st <= S_NMV0; end
             S_NMV0: begin i <= 0; own_addr <= V_BASE; st <= S_NMV1; end
@@ -206,8 +249,58 @@ module drs_iter #(
                 st <= S_NMV4;
             end
             S_NMV4: begin
-                if (i + 1 >= L) st <= S_KSSTART;
+                if (i + 1 >= L) begin i <= 0; own_addr <= V_BASE; st <= S_VPC0; end
                 else begin i <= i + 1; own_addr <= V_BASE + i + 1; st <= S_NMV1; end
+            end
+            // ============ Anderson apply (aa_round): stream (x=v_prev, f=v),
+            // back up both to SAFEV/SAFEVP, accumulate ||x-f||^2 for norm_g ====
+            S_AA0: begin aa_start <= 1; gacc <= 0; aa_done_r <= 0; aa_cnt <= aa_cnt + 1; i <= 0; own_addr <= VPR_BASE; st <= S_AA1; end
+            S_AA1: begin aa_xr <= ram_rdata; own_addr <= V_BASE + i; st <= S_AA2; end
+            S_AA2: begin aa_fr <= ram_rdata; sa <= aa_xr; sb <= aa_fr; ssub <= 1; st <= S_AA3; end
+            S_AA3: begin
+                a1 <= so1; b1 <= so1; aa_x <= aa_xr; aa_f <= aa_fr; aa_dv <= 1; st <= S_AA4;
+            end
+            S_AA4: begin sc <= gacc; sd <= po1; ssub2 <= 0; st <= S_AA5; end
+            S_AA5: begin gacc <= so2; st <= S_AA6; end
+            S_AA6: begin
+                own_addr <= SAFEV_BASE + i; own_wdata <= aa_fr; own_we <= 1; st <= S_AA7;
+            end
+            S_AA7: begin
+                own_addr <= SAFEVP_BASE + i; own_wdata <= aa_xr; own_we <= 1;
+                if (i + 1 >= L) begin i <= 0; st <= S_AA8; end
+                else begin i <= i + 1; own_addr <= VPR_BASE + i; st <= S_AA1; end
+            end
+            S_AA8: begin
+                aa_dv <= 0;
+                if (aa_o_valid) begin
+                    own_addr <= V_BASE + i; own_wdata <= aa_fout; own_we <= 1;
+                    if (i + 1 >= L) st <= S_AA9; else i <= i + 1;
+                end
+            end
+            S_AA9: begin
+                // aa_done pulses here (1 cycle after the last f_out) — latch it
+                // NOW; S_AA10 samples it one cycle too late (S_IDLE clears it).
+                rs_start <= 1; rs_in <= gacc; rs_rise <= 0;
+                if (aa_done) aa_done_r <= 1;
+                st <= S_AA10;
+            end
+            S_AA10: begin
+                if (aa_done) aa_done_r <= 1;
+                rs_done_p <= rs_done;
+                if (rs_done && !rs_done_p) begin norm_g_r <= rs_o; rs_rise <= 1; end
+                if (aa_done_r && rs_rise) begin
+                    aa_done_r <= 0; rs_rise <= 0; i <= 0; own_addr <= V_BASE; st <= S_NM0;
+                end
+            end
+            // ============ v_prev <- v (after AA apply / normalize) ============
+            S_VPC0: begin i <= 0; own_addr <= V_BASE; st <= S_VPC1; end
+            S_VPC1: begin vv <= ram_rdata; own_addr <= VPR_BASE + i; st <= S_VPC2; end
+            S_VPC2: begin
+                own_addr <= VPR_BASE + i; own_wdata <= vv; own_we <= 1; st <= S_VPC3;
+            end
+            S_VPC3: begin
+                if (i + 1 >= L) st <= S_KSSTART;
+                else begin i <= i + 1; own_addr <= V_BASE + i; st <= S_VPC1; end
             end
             // ============ KKT solve ============
             S_KSSTART: begin
@@ -353,8 +446,56 @@ module drs_iter #(
                 st <= S_V7;
             end
             S_V7: begin
-                if (i + 1 >= L) st <= S_DONE;
+                if (i + 1 >= L) begin
+                    if (aa_round) begin i <= 0; own_addr <= V_BASE; st <= S_SG0; end
+                    else st <= S_DONE;
+                end
                 else begin i <= i + 1; own_addr <= U_BASE + i + 1; st <= S_V1; end
+            end
+            // ============ AA safeguard: ||v - v_prev|| vs AA_SAFEGUARD*norm_g ===
+            S_SG0: begin i <= 0; gacc <= 0; own_addr <= V_BASE; st <= S_SG1; end
+            S_SG1: begin vv <= ram_rdata; own_addr <= VPR_BASE + i; st <= S_SG2; end
+            S_SG2: begin gv <= ram_rdata; sa <= vv; sb <= gv; ssub <= 1; st <= S_SG3; end
+            S_SG3: begin a1 <= so1; b1 <= so1; st <= S_SG4; end
+            S_SG4: begin sc <= gacc; sd <= po1; ssub2 <= 0; st <= S_SG5; end
+            S_SG5: begin
+                gacc <= so2;
+                if (i + 1 >= L) st <= S_SG6;
+                else begin i <= i + 1; own_addr <= V_BASE + i; st <= S_SG1; end
+            end
+            S_SG6: begin rs_start <= 1; rs_in <= gacc; st <= S_SG7; end
+            S_SG7: begin
+                if (rs_done) begin
+                    a2 <= norm_g_r; b2 <= AA_SAFEGUARD; cmp_a <= rs_o; st <= S_SG8;
+                end
+            end
+            S_SG8: begin cmp_b <= po2; st <= S_SG9; end
+            S_SG9: begin
+                // scs_faithful.safeguard returns early unless the LAST apply
+                // actually solved (self.success), which happens only from the
+                // 11th apply onward (aa.iter >= AA_MINLEN=10). aa_cnt is 1-based:
+                // checks are meaningful from aa_cnt >= 11.
+                if (cmp_gt && aa_cnt >= 11) st <= S_SC0;      // reject: roll back
+                else st <= S_DONE;
+            end
+            // ============ rollback: SAFEV->v, SAFEVP->v_prev ============
+            S_SC0: begin i <= 0; own_addr <= SAFEV_BASE; st <= S_SC1; end
+            S_SC1: begin vv <= ram_rdata; own_addr <= V_BASE + i; st <= S_SC2; end
+            S_SC2: begin
+                own_addr <= V_BASE + i; own_wdata <= vv; own_we <= 1; st <= S_SC3;
+            end
+            S_SC3: begin
+                if (i + 1 >= L) st <= S_SCP0;
+                else begin i <= i + 1; own_addr <= SAFEV_BASE + i; st <= S_SC1; end
+            end
+            S_SCP0: begin i <= 0; own_addr <= SAFEVP_BASE; st <= S_SCP1; end
+            S_SCP1: begin vv <= ram_rdata; own_addr <= VPR_BASE + i; st <= S_SCP2; end
+            S_SCP2: begin
+                own_addr <= VPR_BASE + i; own_wdata <= vv; own_we <= 1; st <= S_SCP3;
+            end
+            S_SCP3: begin
+                if (i + 1 >= L) st <= S_DONE;
+                else begin i <= i + 1; own_addr <= SAFEVP_BASE + i; st <= S_SCP1; end
             end
             S_DONE: begin done <= 1; st <= S_IDLE; end
             default: st <= S_IDLE;

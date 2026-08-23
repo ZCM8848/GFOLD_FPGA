@@ -29,13 +29,14 @@ module tb_drs_iter;
     assign kkt_rdata = kmem[kkt_addr];
 
     reg [63:0] v0 [0:4095], g [0:4095], dr [0:4095], band [0:32767];
-    integer k;
+    integer k, i;
     reg watchdog = 0;
     always begin #300000000; if (!watchdog) begin $display("TIMEOUT: sim stuck"); $finish; end end
 
     task run_iter;
         input [15:0] it;
         input rf;
+        integer kk;
         begin
             @(negedge clk); start = 1; refactor = rf; iter = it; band_valid = 0;
             @(negedge clk); start = 0;
@@ -43,7 +44,7 @@ module tb_drs_iter;
                 // wait until drs_iter is actually in S_KSBAND (after normalize
                 // on iter>=1) before streaming — the stream is handshakeless.
                 while (dut.st !== dut.S_KSBAND) @(posedge clk);
-                for (k = 0; k < (HB+1)*N; k = k + 1) begin @(negedge clk); band_in = band[k]; band_valid = 1; end
+                for (kk = 0; kk < (HB+1)*N; kk = kk + 1) begin @(negedge clk); band_in = band[kk]; band_valid = 1; end
                 @(negedge clk); band_valid = 0;
             end
             while (!done) @(posedge clk);
@@ -59,34 +60,13 @@ module tb_drs_iter;
         for (k = 0; k < LM1; k = k + 1) smem[4*L + k] = g[k];
         for (k = 0; k < L; k = k + 1) smem[4*L + LM1 + k] = dr[k];
         rst_n = 0; repeat (4) @(negedge clk); rst_n = 1;
-        run_iter(0, 1);
-        $display("ITER 0 done (refactor=1)");
-        $write("V1:");
-        for (k = 0; k < L; k = k + 1) $write(" %h", smem[k]);
-        $write("\n");
-        $write("UT1:");
-        for (k = 0; k < L; k = k + 1) $write(" %h", smem[L + k]);
-        $write("\n");
-        $write("U1:");
-        for (k = 0; k < L; k = k + 1) $write(" %h", smem[2*L + k]);
-        $write("\n");
-        $write("RSK1:");
-        for (k = 0; k < L; k = k + 1) $write(" %h", smem[3 * L + k]);
-        $write("\n");
-        run_iter(1, 0);
-        $display("ITER 1 done (refactor=0: reuse L/D)");
-        $write("V2:");
-        for (k = 0; k < L; k = k + 1) $write(" %h", smem[k]);
-        $write("\n");
-        $write("UT2:");
-        for (k = 0; k < L; k = k + 1) $write(" %h", smem[L + k]);
-        $write("\n");
-        $write("U2:");
-        for (k = 0; k < L; k = k + 1) $write(" %h", smem[2 * L + k]);
-        $write("\n");
-        $write("RSK2:");
-        for (k = 0; k < L; k = k + 1) $write(" %h", smem[3 * L + k]);
-        $write("\n");
+        // 30 iterations: iter 0 refactor=1 (factorize), rest refactor=0 (reuse L/D)
+        for (k = 0; k < 30; k = k + 1) begin
+            run_iter(k, (k == 0) ? 1 : 0);
+            $write("V%0d:", k + 1);
+            for (i = 0; i < L; i = i + 1) $write(" %h", smem[i]);
+            $write("\n");
+        end
         $display("ALL DONE");
         $finish;
     end
