@@ -313,7 +313,7 @@ module drs_iter #(
             S_AA7: begin
                 own_addr <= SAFEVP_BASE + i; own_wdata <= aa_xr; own_we <= 1;
                 if (i + 1 >= L) begin i <= 0; st <= S_AA8; end
-                else begin i <= i + 1; own_addr <= VPR_BASE + i; st <= S_AA1; end
+                else begin i <= i + 1; own_addr <= VPR_BASE + i + 1; st <= S_AA1; end
             end
             S_AA8: begin
                 aa_dv <= 0;
