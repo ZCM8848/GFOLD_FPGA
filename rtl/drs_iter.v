@@ -39,6 +39,8 @@ module drs_iter #(
     input  wire [63:0]       band_in,
     input  wire              band_valid,
     input  wire [15:0]       iter,            // 0 = first iteration (FEAS)
+    input  wire              scale_valid,     // pulse: recompute diag_r/D_y, rebuild band, g, aa.reset, v remap
+    input  wire [63:0]       scale_r,         // new scale for this update
     // ---- state RAM port (drs_iter owns; pdc shares via mux) ----
     output reg  [RAM_AW-1:0] ram_addr,
     output reg  [63:0]       ram_wdata,
@@ -66,6 +68,38 @@ module drs_iter #(
     localparam ZMASK_BASE = DY_BASE + M;           // zero-cone row mask (M words, 0/1)
     localparam AA_SAFEGUARD = 64'h3FF0000000000000;  // 1.0 (scs_faithful AA_SAFEGUARD)
 
+    // ---- FSM state definitions (moved up so sub-block ports can use st) ----
+    localparam S_IDLE=0, S_NM0=1, S_NM1=2, S_NM2=3, S_NM3=4, S_NM4=67, S_NMR=5, S_NMRW=6,
+               S_NMRX=7, S_NMV0=8, S_NMV1=9, S_NMV2=10, S_NMV3=11, S_NMV4=12,
+               S_KSSTART=13, S_KSBAND=14, S_KSVX=15, S_KSVXW=16,
+               S_KSVY=17, S_KSVYW=18, S_KSCAP=19, S_KSDONE=20, S_UTT=21, S_KSDONE_ETA=22,
+ S_RP0=23, S_RP1=24, S_RP2=25, S_RP3=26, S_RP4=27, S_RP5=68, S_RPW=28, S_UTT2=29,
+ S_GT0=30, S_GT1=31, S_GT2=32, S_GT3=33, S_GT4=34, S_GT5=35, S_GT6=36,
+ S_U0=37, S_U1=38, S_U2=39, S_U3=40, S_U4=41, S_U5=42,
+ S_CONE=43, S_CONEW=44, S_UM0=45, S_UM1=46, S_UMW=47,
+ S_RSK0=48, S_RSK1=49, S_RSK2=50, S_RSK3=51, S_RSK4=52,
+ S_RSK5=53, S_RSK6=54, S_RSK7=55, S_RSK8=56, S_RSK9=57,
+ S_V0=58, S_V1=59, S_V2=60, S_V3=61, S_V4=62, S_V5=63,
+ S_V6=64, S_V7=65, S_DONE=66,
+ S_AA0=69, S_AA1=70, S_AA2=71, S_AA3=72, S_AA4=73, S_AA5=74,
+ S_AA6=75, S_AA7=76, S_AA8=77, S_AA9=78, S_AA10=79, S_AAW=80,
+ S_VPC0=81, S_VPC1=82, S_VPC2=83, S_VPC3=84,
+ S_SG0=85, S_SG1=86, S_SG2=87, S_SG3=88, S_SG4=89, S_SG5=90,
+ S_SG6=91, S_SG7=92, S_SG8=93, S_SG9=94,
+ S_SC0=95, S_SC1=96, S_SC2=97, S_SC3=98,
+ S_SCP0=99, S_SCP1=100, S_SCP2=101, S_SCP3=102,
+ S_SX0=110, S_SX1=111, S_SX2=112, S_SX3=113, S_SX4=114, S_SX5=115,
+ S_SB=116, S_SBW=117,
+ S_GKS0=118, S_GKSB=119, S_GKSVX=120, S_GKSVXW=121, S_GKSVY=122, S_GKSVYW=123,
+ S_GKSZ=124, S_GKSD=125,
+ S_AAR=126, S_AARW=127,
+ S_VR0=128, S_VR1=129, S_VR2=130, S_VR3=131, S_VR4=132, S_VR5=133, S_VR6=134,
+ S_VR7=135, S_VR8=136;
+    reg [7:0] st;   // 0..136 fits in 8 bits
+    // force refactor=1 during a scale-update g recompute (band comes from s_build)
+    wire ks_refactor = refactor || (st == S_GKS0 || st == S_GKSB || st == S_GKSVX ||
+                                    st == S_GKSVY || st == S_GKSZ || st == S_GKSD);
+
     // ---- sub-blocks ----
     reg  ks_start, ks_band_valid, ks_din_valid;
     reg  [63:0] ks_band_in, ks_x_in;
@@ -75,11 +109,24 @@ module drs_iter #(
                 .AROW_FILE(AROW_FILE), .ACOL_FILE(ACOL_FILE), .AVAL_FILE(AVAL_FILE),
                 .RY_FILE("../data/kkt/full/r_y_r.hex"), .DY_FILE("../data/kkt/full/Dy_r.hex")) u_ks(
         .clk(clk), .rst_n(rst_n), .start(ks_start),
-        .band_in(ks_band_in), .band_valid(ks_band_valid), .refactor(refactor),
+        .band_in(ks_band_in), .band_valid(ks_band_valid), .refactor(ks_refactor),
         .x_in(ks_x_in), .din_valid(ks_din_valid),
         .ram_addr(kkt_addr), .ram_wdata(kkt_wdata), .ram_we(kkt_we),
         .ram_rdata(kkt_rdata),
         .z_out(ks_z_out), .o_valid(ks_o_valid), .done(ks_done));
+
+    // ---- s_build (scale update: rebuild S band from D_y + A COO) ----
+    reg  sb_start;
+    wire sb_done;
+    wire [RAM_AW-1:0] sb_addr;
+    wire [63:0] sb_wdata;
+    wire sb_we;
+    s_build #(.N(N), .M(M), .NNZ(NNZ), .HB(HB), .MAXROW(6), .RAM_AW(RAM_AW),
+              .BAND_OFFSET(BAND_BASE), .DY_OFFSET(DY_BASE),
+              .AROW_FILE(AROW_FILE), .ACOL_FILE(ACOL_FILE), .AVAL_FILE(AVAL_FILE)) u_sb(
+        .clk(clk), .rst_n(rst_n), .start(sb_start),
+        .ram_addr(sb_addr), .ram_wdata(sb_wdata), .ram_we(sb_we), .ram_rdata(ram_rdata),
+        .done(sb_done));
 
     reg  rp_start, rp_dv;
     reg  [63:0] rp_r, rp_g, rp_p, rp_mu, rp_eta;
@@ -105,7 +152,8 @@ module drs_iter #(
     wire aa_rdy;
     wire [63:0] aa_fout;
     wire aa_o_valid, aa_done;
-    anderson #(.DIM(L), .MEM(10)) u_aa(.clk(clk), .rst_n(rst_n), .start(aa_start),
+    reg  aa_reset_s;
+    anderson #(.DIM(L), .MEM(10)) u_aa(.clk(clk), .rst_n(rst_n), .aa_reset(aa_reset_s), .start(aa_start),
         .x_in(aa_x), .f_in(aa_f), .din_valid(aa_dv), .rdy(aa_rdy),
         .f_out(aa_fout), .o_valid(aa_o_valid), .done(aa_done));
     // AA round: iter>0 and iter%10==0
@@ -131,6 +179,11 @@ module drs_iter #(
     reg ssub2;
     wire [63:0] so2;
     fp64_add ua2(sc, sd, ssub2, so2);
+
+    reg  div_start;
+    reg  [63:0] div_a, div_b;
+    wire div_done; wire [63:0] div_o;
+    fp64_div udiv(.clk(clk), .start(div_start), .a(div_a), .b(div_b), .done(div_done), .o(div_o));
     reg  rs_start;
     reg  [63:0] rs_in;
     wire rs_done;
@@ -142,37 +195,21 @@ module drs_iter #(
     reg [63:0] own_wdata;
     reg own_we;
 
-    // ---- FSM ----
-    localparam S_IDLE=0, S_NM0=1, S_NM1=2, S_NM2=3, S_NM3=4, S_NM4=67, S_NMR=5, S_NMRW=6,
-               S_NMRX=7, S_NMV0=8, S_NMV1=9, S_NMV2=10, S_NMV3=11, S_NMV4=12,
-               S_KSSTART=13, S_KSBAND=14, S_KSVX=15, S_KSVXW=16,
-               S_KSVY=17, S_KSVYW=18, S_KSCAP=19, S_KSDONE=20, S_UTT=21, S_KSDONE_ETA=22,
- S_RP0=23, S_RP1=24, S_RP2=25, S_RP3=26, S_RP4=27, S_RP5=68, S_RPW=28, S_UTT2=29,
- S_GT0=30, S_GT1=31, S_GT2=32, S_GT3=33, S_GT4=34, S_GT5=35, S_GT6=36,
- S_U0=37, S_U1=38, S_U2=39, S_U3=40, S_U4=41, S_U5=42,
- S_CONE=43, S_CONEW=44, S_UM0=45, S_UM1=46, S_UMW=47,
- S_RSK0=48, S_RSK1=49, S_RSK2=50, S_RSK3=51, S_RSK4=52,
- S_RSK5=53, S_RSK6=54, S_RSK7=55, S_RSK8=56, S_RSK9=57,
- S_V0=58, S_V1=59, S_V2=60, S_V3=61, S_V4=62, S_V5=63,
- S_V6=64, S_V7=65, S_DONE=66,
- S_AA0=69, S_AA1=70, S_AA2=71, S_AA3=72, S_AA4=73, S_AA5=74,
- S_AA6=75, S_AA7=76, S_AA8=77, S_AA9=78, S_AA10=79, S_AAW=80,
- S_VPC0=81, S_VPC1=82, S_VPC2=83, S_VPC3=84,
- S_SG0=85, S_SG1=86, S_SG2=87, S_SG3=88, S_SG4=89, S_SG5=90,
- S_SG6=91, S_SG7=92, S_SG8=93, S_SG9=94,
- S_SC0=95, S_SC1=96, S_SC2=97, S_SC3=98,
- S_SCP0=99, S_SCP1=100, S_SCP2=101, S_SCP3=102;
- reg [6:0] st;   // 0..102 fits in 7 bits
- reg [15:0] i;
- reg [63:0] vv, utv, gv, drv, tau_r, norm_r, sqacc, v_eta;
- reg [63:0] gacc, norm_g_r, aa_xr, aa_fr;
- reg sflag;
+    // ---- FSM ---- (state defs at module top; see S_IDLE etc above)
+    reg [15:0] i;
+    reg [63:0] vv, utv, gv, drv, tau_r, norm_r, sqacc, v_eta;
+    reg [63:0] gacc, norm_g_r, aa_xr, aa_fr;
+    reg sflag;
  reg aa_done_r;
  reg rs_done_p, rs_rise;
  reg [15:0] aa_cnt;
+ reg [63:0] rinv, zm, vr, vd, vu, vv2;
     wire pdc_own = (st == S_CONE || st == S_CONEW);
+    wire sb_own = (st == S_SB || st == S_SBW);
     always @* begin
-        if (pdc_own) begin
+        if (sb_own) begin
+            ram_addr = sb_addr; ram_wdata = sb_wdata; ram_we = sb_we;
+        end else if (pdc_own) begin
             ram_addr = U_BASE + N + pdc_addr;
             ram_wdata = pdc_wdata;
             ram_we = pdc_we;
@@ -202,6 +239,8 @@ module drs_iter #(
             gacc <= 0; norm_g_r <= 0; aa_xr <= 0; aa_fr <= 0; sflag <= 0;
             cmp_a <= 0; cmp_b <= 0; aa_done_r <= 0;
             rs_done_p <= 0; rs_rise <= 0; aa_cnt <= 0;
+            rinv <= 0; zm <= 0; vr <= 0; vd <= 0; vu <= 0; vv2 <= 0;
+            sb_start <= 0; aa_reset_s <= 0;
         end else begin
             ks_start <= 0; ks_band_valid <= 0; ks_din_valid <= 0;
             rp_start <= 0; rp_dv <= 0; pdc_start <= 0; rs_start <= 0;
@@ -210,7 +249,8 @@ module drs_iter #(
             case (st)
             S_IDLE: begin
                 done <= 0;
-                if (start) begin
+                if (scale_valid) begin i <= 0; own_addr <= ZMASK_BASE; st <= S_SX0; end
+                else if (start) begin
                     if (iter == 0) begin i <= 0; own_addr <= V_BASE; st <= S_VPC0; end  // FEAS: v_prev=v0, no normalize
                     else if (aa_round) begin i <= 0; own_addr <= VPR_BASE; st <= S_AA0; end  // AA apply first
                     else begin i <= 0; own_addr <= V_BASE; st <= S_NM0; end
@@ -501,6 +541,93 @@ module drs_iter #(
                 if (i + 1 >= L) st <= S_DONE;
                 else begin i <= i + 1; own_addr <= SAFEVP_BASE + i; st <= S_SCP1; end
             end
+
+            // ============ scale update: recompute diag_r[n:n+m] + D_y, then
+            // rebuild band (s_build), g = KKT^-1[c;-b], aa.reset, v remap ============
+            S_SX0: begin
+                // rinv = 1/scale (one division)
+                div_a <= 64'h3FF0000000000000; div_b <= scale_r; div_start <= 1;
+                i <= 0; own_addr <= ZMASK_BASE; st <= S_SX1;
+            end
+            S_SX1: begin
+                if (div_done) begin rinv <= div_o; st <= S_SX2; end
+            end
+            S_SX2: begin zm <= ram_rdata; st <= S_SX3; end      // zero-cone row mask[i]
+            S_SX3: begin
+                // r_y = rinv * (mask? 1e-3 : 1);  D_y = scale * (mask? 1000 : 1)
+                a1 <= rinv;
+                b1 <= (zm == 64'h0) ? 64'h3F50624DD2F1A9FC : 64'h3FF0000000000000;
+                a2 <= scale_r;
+                b2 <= (zm == 64'h0) ? 64'h408F400000000000 : 64'h3FF0000000000000;
+                st <= S_SX4;
+            end
+            S_SX4: begin
+                own_addr <= DR_BASE + N + i; own_wdata <= po1; own_we <= 1; st <= S_SX5;
+            end
+            S_SX5: begin
+                own_addr <= DY_BASE + i; own_wdata <= po2; own_we <= 1;
+                if (i + 1 >= M) begin sb_start <= 1; st <= S_SB; end
+                else begin i <= i + 1; own_addr <= ZMASK_BASE + i; st <= S_SX2; end
+            end
+            // ---- s_build: rebuild S band into BAND_BASE ----
+            S_SB: begin sb_start <= 1; st <= S_SBW; end
+            S_SBW: begin
+                if (sb_done) begin i <= 0; own_addr <= BAND_BASE; st <= S_GKS0; end
+            end
+            // ---- KKT: g = KKT^-1[c;-b]  (band from BAND_BASE, rhs c/-b from CB_BASE) ----
+            S_GKS0: begin ks_start <= 1; i <= 0; own_addr <= BAND_BASE; st <= S_GKSB; end
+            S_GKSB: begin
+                ks_band_in <= ram_rdata; ks_band_valid <= 1;
+                if (i + 1 >= (HB + 1) * N) begin i <= 0; own_addr <= CB_BASE; st <= S_GKSVX; end
+                else begin i <= i + 1; own_addr <= BAND_BASE + i + 1; st <= S_GKSB; end
+            end
+            S_GKSVX: begin
+                ks_x_in <= ram_rdata; ks_din_valid <= 1;
+                if (i + 1 >= N) begin i <= 0; own_addr <= CB_BASE + N; st <= S_GKSVY; end
+                else begin i <= i + 1; own_addr <= CB_BASE + i + 1; st <= S_GKSVX; end
+            end
+            S_GKSVY: begin
+                ks_x_in <= ram_rdata; ks_din_valid <= 1;
+                if (i + 1 >= M) begin i <= 0; st <= S_GKSZ; end
+                else begin i <= i + 1; own_addr <= CB_BASE + N + i + 1; st <= S_GKSVY; end
+            end
+            S_GKSZ: begin
+                if (ks_o_valid) begin
+                    own_addr <= G_BASE + i; own_wdata <= ks_z_out; own_we <= 1;
+                    if (i + 1 >= LM1) st <= S_GKSD; else i <= i + 1;
+                end
+            end
+            S_GKSD: begin
+                if (ks_done) begin aa_reset_s <= 1; st <= S_AAR; end
+            end
+            // ---- anderson reset (clear history, aa_cnt) ----
+            S_AAR: begin aa_reset_s <= 1; st <= S_AARW; end
+            S_AARW: begin
+                if (aa_done) begin
+                    aa_reset_s <= 0; aa_cnt <= 0; i <= 0; own_addr <= RSK_BASE; st <= S_VR0;
+                end
+            end
+            // ---- v remap: v = rsk/diag_r + 2*u_t - u (all l-1 elements) ----
+            S_VR0: begin i <= 0; own_addr <= RSK_BASE; st <= S_VR1; end
+            S_VR1: begin vr <= ram_rdata; own_addr <= DR_BASE + i; st <= S_VR2; end
+            S_VR2: begin
+                vd <= ram_rdata; div_a <= vr; div_b <= vd; div_start <= 1;
+                own_addr <= UT_BASE + i; st <= S_VR3;
+            end
+            S_VR3: begin vu <= ram_rdata; own_addr <= U_BASE + i; st <= S_VR4; end
+            S_VR4: begin vv2 <= ram_rdata; a1 <= vu; b1 <= 64'h4000000000000000; st <= S_VR5; end
+            S_VR5: begin sa <= po1; sb <= vv2; ssub <= 1; st <= S_VR6; end
+            S_VR6: begin
+                if (div_done) begin sc <= so1; sd <= div_o; ssub2 <= 0; st <= S_VR7; end
+            end
+            S_VR7: begin
+                own_addr <= V_BASE + i; own_wdata <= so2; own_we <= 1; st <= S_VR8;
+            end
+            S_VR8: begin
+                if (i + 1 >= L) st <= S_DONE;
+                else begin i <= i + 1; own_addr <= RSK_BASE + i; st <= S_VR1; end
+            end
+
             S_DONE: begin done <= 1; st <= S_IDLE; end
             default: st <= S_IDLE;
             endcase

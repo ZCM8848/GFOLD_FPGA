@@ -135,7 +135,7 @@ module anderson #(
                 else if (aclr < 4*DIM + 3*DIM*MEM) Y[aclr - 4*DIM - 2*DIM*MEM] <= 0;
                 else if (aclr < 4*DIM + 3*DIM*MEM + MEM) acc_s[aclr - 4*DIM - 3*DIM*MEM] <= 0;
                 else acc_y[aclr - 4*DIM - 3*DIM*MEM - MEM] <= 0;
-                if (aclr + 1 >= 4*DIM + 3*DIM*MEM + 2*MEM) begin iter <= 0; st <= S_IDLE; end
+                if (aclr + 1 >= 4*DIM + 3*DIM*MEM + 2*MEM) begin iter <= 0; done <= 1; st <= S_IDLE; end
                 else aclr <= aclr + 1;
             end
             // ================= iter==0 load: xarr=x, farr=f, g_prev=x-f =================

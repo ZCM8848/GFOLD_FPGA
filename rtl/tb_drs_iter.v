@@ -12,12 +12,14 @@ module tb_drs_iter;
     reg start = 0, refactor = 0, band_valid = 0;
     reg [63:0] band_in;
     reg [15:0] iter = 0;
-    wire [14:0] ram_addr; wire [63:0] ram_wdata; wire ram_we; wire [63:0] ram_rdata;
+    reg scale_valid = 0; reg [63:0] scale_r = 64'h3FF0000000000000;
+    wire [15:0] ram_addr; wire [63:0] ram_wdata; wire ram_we; wire [63:0] ram_rdata;
     wire [13:0] kkt_addr; wire [63:0] kkt_wdata; wire kkt_we; wire [63:0] kkt_rdata;
     wire done;
     drs_iter #(.N(N), .M(M), .NNZ(NNZ), .HB(HB)) dut(
         .clk(clk), .rst_n(rst_n), .start(start),
         .refactor(refactor), .band_in(band_in), .band_valid(band_valid), .iter(iter),
+        .scale_valid(scale_valid), .scale_r(scale_r),
         .ram_addr(ram_addr), .ram_wdata(ram_wdata), .ram_we(ram_we), .ram_rdata(ram_rdata),
         .kkt_addr(kkt_addr), .kkt_wdata(kkt_wdata), .kkt_we(kkt_we), .kkt_rdata(kkt_rdata),
         .done(done));
@@ -29,6 +31,7 @@ module tb_drs_iter;
     assign kkt_rdata = kmem[kkt_addr];
 
     reg [63:0] v0 [0:4095], g [0:4095], dr [0:4095], band [0:32767];
+    reg [63:0] cr [0:2047], nb [0:4095], zmask [0:4095];
     integer k, i;
     reg watchdog = 0;
     always begin #300000000; if (!watchdog) begin $display("TIMEOUT: sim stuck"); $finish; end end
@@ -56,17 +59,28 @@ module tb_drs_iter;
         $readmemh("../data/kkt/full/g.hex", g);
         $readmemh("../data/kkt/full/diag_r.hex", dr);
         $readmemh("../data/kkt/full/band_r.hex", band);
+        $readmemh("../data/kkt/full/c_r.hex", cr);
+        $readmemh("../data/kkt/full/nb_r.hex", nb);
+        $readmemh("../data/kkt/full/zmask.hex", zmask);
         for (k = 0; k < L; k = k + 1) smem[k] = v0[k];
         for (k = 0; k < LM1; k = k + 1) smem[4*L + k] = g[k];
         for (k = 0; k < L; k = k + 1) smem[4*L + LM1 + k] = dr[k];
+        for (k = 0; k < N; k = k + 1) smem[dut.CB_BASE + k] = cr[k];
+        for (k = 0; k < M; k = k + 1) smem[dut.CB_BASE + N + k] = nb[k];
+        for (k = 0; k < M; k = k + 1) smem[dut.ZMASK_BASE + k] = zmask[k];
         rst_n = 0; repeat (4) @(negedge clk); rst_n = 1;
-        // 30 iterations: iter 0 refactor=1 (factorize), rest refactor=0 (reuse L/D)
-        for (k = 0; k < 30; k = k + 1) begin
+        // 5 iterations, then trigger one scale update (flow check)
+        for (k = 0; k < 5; k = k + 1) begin
             run_iter(k, (k == 0) ? 1 : 0);
             $write("V%0d:", k + 1);
             for (i = 0; i < L; i = i + 1) $write(" %h", smem[i]);
             $write("\n");
         end
+        // scale update (scale=0.1787, first SW update value)
+        scale_r = 64'h3FC6E1050A6F9809; scale_valid = 1;
+        while (!done) @(posedge clk);
+        scale_valid = 0; @(posedge clk); @(posedge clk);
+        $display("SCALE DONE");
         $display("ALL DONE");
         $finish;
     end
