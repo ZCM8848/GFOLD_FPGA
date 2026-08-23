@@ -10,7 +10,7 @@ import numpy as np
 import scipy.sparse as sp
 sys.path.insert(0, os.path.dirname(__file__))
 from drs_reference import reorder_problem, build_diag_r
-from banded_reference import RHO_X
+from banded_reference import RHO_X, Z
 
 def f64(v): return struct.unpack("<Q", struct.pack("<d", float(v)))[0]
 def write(f, vals):
@@ -34,4 +34,11 @@ out = "rtl/data/kkt/full"
 write(os.path.join(out, "r_y_r.hex"), ry)
 write(os.path.join(out, "Dy_r.hex"), Dy)
 write(os.path.join(out, "band_r.hex"), band)
-print("wrote r_y_r/Dy_r/band_r (bw=%d) nnz=%d" % (bw, S.nnz))
+# zero-cone row mask (reordered frame): 1.0 if rp[i] < Z else 0.0 — HW diag_r/D_y
+# recompute on scale update selects 1/(1000*scale) vs 1/scale by this mask.
+zmask = np.where(rp < Z, 1.0, 0.0)
+write(os.path.join(out, "zmask.hex"), zmask)
+# c and -b (reordered) for g recompute (g = KKT^{-1}[c;-b])
+write(os.path.join(out, "c_r.hex"), cr)
+write(os.path.join(out, "nb_r.hex"), -br)
+print("wrote r_y_r/Dy_r/band_r/zmask/c_r/nb_r (bw=%d) nnz=%d" % (bw, S.nnz))

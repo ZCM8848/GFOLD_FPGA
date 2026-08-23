@@ -239,6 +239,7 @@ def solve(max_iter, eps=1e-4, adaptive_scale=True, interval=10, track=None, safe
                         g = lu.solve(np.concatenate([cr, -br]))
                         aa.reset()
                         v[:] = rsk / diag_r + 2 * u_t - u
+                        scale_hist.append((i, scale))
         if track and i % track == 0:
             tau = u[l - 1]
             xx = u[:n] / tau if abs(tau) > 1e-12 else u[:n]

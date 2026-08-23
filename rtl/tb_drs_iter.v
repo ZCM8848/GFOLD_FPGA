@@ -21,10 +21,10 @@ module tb_drs_iter;
         .ram_addr(ram_addr), .ram_wdata(ram_wdata), .ram_we(ram_we), .ram_rdata(ram_rdata),
         .kkt_addr(kkt_addr), .kkt_wdata(kkt_wdata), .kkt_we(kkt_we), .kkt_rdata(kkt_rdata),
         .done(done));
-    reg [63:0] smem [0:32767];
+    reg [63:0] smem [0:65535];
     always @(posedge clk) if (ram_we) smem[ram_addr] <= ram_wdata;
     assign ram_rdata = smem[ram_addr];
-    reg [63:0] kmem [0:16383];
+    reg [63:0] kmem [0:32767];
     always @(posedge clk) if (kkt_we) kmem[kkt_addr] <= kkt_wdata;
     assign kkt_rdata = kmem[kkt_addr];
 

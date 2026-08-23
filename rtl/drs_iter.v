@@ -28,7 +28,7 @@ module drs_iter #(
     parameter N = 1100, M = 2107, NNZ = 4783, HB = 17,
     parameter L = N + M + 1,
     parameter LM1 = L - 1,
-    parameter RAM_AW = 15,
+    parameter RAM_AW = 16,
     parameter SQRT_L = 64'h404c51d19a043914,   // sqrt(L), L=3208
     parameter AROW_FILE = "../data/kkt/full/Arow.hex",
     parameter ACOL_FILE = "../data/kkt/full/Acol.hex",
@@ -60,6 +60,10 @@ module drs_iter #(
     localparam VPR_BASE= 5 * L + LM1;      // v_prev (AA apply input x)
     localparam SAFEV_BASE = 6 * L + LM1;   // v before AA (apply input f backup)
     localparam SAFEVP_BASE = 7 * L + LM1;  // v_prev before AA (apply input x backup)
+    localparam CB_BASE = 8 * L + 2 * LM1 + L;      // c[0..n) + (-b)[n..n+m) for g recompute
+    localparam BAND_BASE = CB_BASE + LM1;          // s_build band output (19800 words)
+    localparam DY_BASE = BAND_BASE + (HB + 1) * N; // D_y for s_build (M words)
+    localparam ZMASK_BASE = DY_BASE + M;           // zero-cone row mask (M words, 0/1)
     localparam AA_SAFEGUARD = 64'h3FF0000000000000;  // 1.0 (scs_faithful AA_SAFEGUARD)
 
     // ---- sub-blocks ----

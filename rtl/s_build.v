@@ -23,6 +23,8 @@
 module s_build #(
     parameter N = 10, M = 20, NNZ = 41, HB = 4, MAXROW = 4,
     parameter RAM_AW = 15,
+    parameter BAND_OFFSET = 0,   // band output base in the shared RAM
+    parameter DY_OFFSET = 0,     // D_y base (else cur_row = DY_OFFSET + row)
     parameter AROW_FILE = "../data/kkt/small/Arow.hex",
     parameter ACOL_FILE = "../data/kkt/small/Acol.hex",
     parameter AVAL_FILE = "../data/kkt/small/Aval.hex"
@@ -91,13 +93,13 @@ module s_build #(
             end
             // ---- clear whole band region to 0 (1 write/cycle) ----
             S_CLEAR: begin
-                ram_addr <= M + wp; ram_wdata <= 64'h0; ram_we <= 1;
+                ram_addr <= BAND_OFFSET + wp; ram_wdata <= 64'h0; ram_we <= 1;
                 if (wp + 1 >= (HB+1)*N) begin wp <= 0; st <= S_DIAG; end
                 else wp <= wp + 1;
             end
             // ---- init diagonal: B[0][k] = rho_x ----
             S_DIAG: begin
-                ram_addr <= M + wp*(HB+1); ram_wdata <= RHO_X; ram_we <= 1;
+                ram_addr <= BAND_OFFSET + wp*(HB+1); ram_wdata <= RHO_X; ram_we <= 1;
                 if (wp + 1 >= N) begin kk <= 0; st <= S_ROWINIT; end
                 else wp <= wp + 1;
             end
@@ -121,7 +123,7 @@ module s_build #(
             end
             // ---- row complete: read D_y[cur_row] (RAM, data-derived row idx) ----
             S_ROWEND: begin
-                ram_addr <= cur_row; pa <= 0; pb <= 0; st <= S_ROWEND_DY;
+                ram_addr <= DY_OFFSET + cur_row; pa <= 0; pb <= 0; st <= S_ROWEND_DY;
             end
             S_ROWEND_DY: begin
                 dy_row <= ram_rdata; st <= S_PAIR;
@@ -131,7 +133,7 @@ module s_build #(
                 if (dc_w > HB) st <= S_PAIRADV;
                 else begin
                     pa_col <= c_lo_w; dc_r <= dc_w;
-                    ram_addr <= M + c_lo_w*(HB+1) + dc_w;
+                    ram_addr <= BAND_OFFSET + c_lo_w*(HB+1) + dc_w;
                     st <= S_PAIR_BAND;
                 end
             end
@@ -142,7 +144,7 @@ module s_build #(
                 acc_r <= so_acc; st <= S_PAIR_W;
             end
             S_PAIR_W: begin
-                ram_addr <= M + pa_col*(HB+1) + dc_r;
+                ram_addr <= BAND_OFFSET + pa_col*(HB+1) + dc_r;
                 ram_wdata <= acc_r; ram_we <= 1;
                 st <= S_PAIRADV;
             end

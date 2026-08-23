@@ -14,6 +14,7 @@ module tb_s_build;
     wire [14:0] ram_addr; wire [63:0] ram_wdata; wire ram_we; wire [63:0] ram_rdata;
     wire done;
     s_build #(.N(N),.M(M),.NNZ(NNZ),.HB(HB),.MAXROW(MAXROW),
+              .BAND_OFFSET(M),.DY_OFFSET(0),
               .AROW_FILE(AROW_FILE),.ACOL_FILE(ACOL_FILE),.AVAL_FILE(AVAL_FILE)) dut(
         .clk(clk),.rst_n(rst_n),.start(start),
         .ram_addr(ram_addr),.ram_wdata(ram_wdata),.ram_we(ram_we),.ram_rdata(ram_rdata),

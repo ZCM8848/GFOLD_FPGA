@@ -32,6 +32,7 @@ module anderson #(
     parameter MEM = 10
 )(
     input  wire             clk, rst_n,
+    input  wire             aa_reset,        // clear persistent state (scale change)
     // ---- one apply call ----
     input  wire             start,
     input  wire [63:0]      x_in, f_in,
@@ -92,8 +93,9 @@ module anderson #(
                S_AG_LOAD=26, S_AG_STREAM=27, S_AG_CAP=28,
                S_CH_LOAD=29, S_CH_STREAM=30, S_CH_CAP=31,
                S_APP1=32, S_APP2=33, S_APP3=34, S_APP4=35,
-               S_PASS0=36, S_PASS1=37, S_DONE=38;
+               S_PASS0=36, S_PASS1=37, S_DONE=38, S_ACLR=39;
     reg [5:0] st;
+    reg [19:0] aclr;
 
     localparam [63:0] AA_R = 64'h3E45798EE2308C3A;   // 1e-8
 
@@ -101,7 +103,7 @@ module anderson #(
         if (!rst_n) begin
             st <= S_IDLE; done <= 0; o_valid <= 0; rdy <= 0;
             iter <= 0; idx <= 0; wcnt <= 0; fi <= 0; agw <= 0; agcnt <= 0; chcnt <= 0;
-            appi <= 0; appj <= 0; p_i <= 0;
+            appi <= 0; appj <= 0; p_i <= 0; aclr <= 0;
             rs_start <= 0; ag_start <= 0; ch_start <= 0; ag_dv <= 0; ch_dv <= 0;
             a0a <= 0; a0b <= 0; a1a <= 0; a1b <= 0; a2a <= 0; a2b <= 0;
             a3a <= 0; a3b <= 0; a4a <= 0; a4b <= 0; a4sub <= 0;
@@ -114,11 +116,27 @@ module anderson #(
             // ================= IDLE: dispatch =================
             S_IDLE: begin
                 done <= 0; o_valid <= 0; rdy <= 0;
-                if (start) begin
+                if (aa_reset) begin aclr <= 0; st <= S_ACLR; end
+                else if (start) begin
                     wcnt <= 0;
                     if (iter == 0) st <= S_L0;
                     else begin idx <= (iter - 1) % MEM; st <= S_LRST; end
                 end
+            end
+            // ============ scale-change reset: clear all persistent arrays ============
+            S_ACLR: begin
+                // flat-index clear of x/f/g/gp(4*DIM) + S/D/Y(3*DIM*MEM) + acc_s/acc_y(2*MEM)
+                if (aclr < DIM) xarr[aclr] <= 0;
+                else if (aclr < 2*DIM) farr[aclr - DIM] <= 0;
+                else if (aclr < 3*DIM) garr[aclr - 2*DIM] <= 0;
+                else if (aclr < 4*DIM) gprev[aclr - 3*DIM] <= 0;
+                else if (aclr < 4*DIM + DIM*MEM) S[aclr - 4*DIM] <= 0;
+                else if (aclr < 4*DIM + 2*DIM*MEM) D[aclr - 4*DIM - DIM*MEM] <= 0;
+                else if (aclr < 4*DIM + 3*DIM*MEM) Y[aclr - 4*DIM - 2*DIM*MEM] <= 0;
+                else if (aclr < 4*DIM + 3*DIM*MEM + MEM) acc_s[aclr - 4*DIM - 3*DIM*MEM] <= 0;
+                else acc_y[aclr - 4*DIM - 3*DIM*MEM - MEM] <= 0;
+                if (aclr + 1 >= 4*DIM + 3*DIM*MEM + 2*MEM) begin iter <= 0; st <= S_IDLE; end
+                else aclr <= aclr + 1;
             end
             // ================= iter==0 load: xarr=x, farr=f, g_prev=x-f =================
             S_L0: begin
