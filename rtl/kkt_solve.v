@@ -38,6 +38,12 @@ module kkt_solve #(
     input  wire          band_valid,
     // 1: stream band + re-factorize (scale change); 0: reuse last L/D (per-iter)
     input  wire          refactor,
+    // runtime D_y / r_y update (streamed M words each, when par_update=1 at start):
+    // lets a scale change feed the NEW D_y/r_y into zy's computation (else the
+    // static $readmemh arrays hold the scale=1 values and zy is wrong after rescale)
+    input  wire          par_update,
+    input  wire [63:0]   ry_in, dy_in,
+    input  wire          ry_valid, dy_valid,
     input  wire [63:0]   x_in,
     input  wire          din_valid,
     // shared external RAM port (sync write, async read)
@@ -120,7 +126,8 @@ module kkt_solve #(
                S_ZCAP=10, S_ZCAPDONE=11,
                S_SP2START=12, S_SP2FEED=13, S_SP2WAIT=14,
                S_ZY0=15, S_ZY1=16, S_ZY2=17, S_ZY3=18, S_ZY4=19,
-               S_ZOUT0=20, S_ZOUT1=21, S_ZYOUT0=22, S_ZYOUT1=23, S_DONE=24;
+               S_ZOUT0=20, S_ZOUT1=21, S_ZYOUT0=22, S_ZYOUT1=23, S_DONE=24,
+               S_DYRY=25, S_DYDY=26;
     reg [4:0] st;
     reg [15:0] wp, i, r, zo;
     wire sp1_own = (st == S_VY || st == S_SP1WAIT);
@@ -164,11 +171,26 @@ module kkt_solve #(
                 done <= 0;
                 if (start) begin
                     ldl_start <= 1; wp <= 0;
-                    // direct to S_BAND/S_VX (no intermediate state): the caller
-                    // forwards band/vx/vy with a 1-cycle register delay, so the
-                    // first word must be sampled here 1 cycle after start —
-                    // an extra state would misalign values AND the word count.
-                    if (refactor) st <= S_BAND; else st <= S_VX;
+                    // par_update: stream new r_y + D_y into the arrays first
+                    if (par_update) st <= S_DYRY;
+                    else if (refactor) st <= S_BAND; else st <= S_VX;
+                end
+            end
+            // ---- stream M r_y + M D_y words (scale change: refresh zy's D_y/r_y) ----
+            S_DYRY: begin
+                if (ry_valid) begin
+                    r_y_arr[wp] <= ry_in;
+                    if (wp + 1 >= M) begin wp <= 0; st <= S_DYDY; end
+                    else wp <= wp + 1;
+                end
+            end
+            S_DYDY: begin
+                if (dy_valid) begin
+                    Dy_arr[wp] <= dy_in;
+                    if (wp + 1 >= M) begin
+                        wp <= 0;
+                        if (refactor) st <= S_BAND; else st <= S_VX;
+                    end else wp <= wp + 1;
                 end
             end
             // ---- stream (HB+1)*N band words into LDL (only when refactor=1) ----

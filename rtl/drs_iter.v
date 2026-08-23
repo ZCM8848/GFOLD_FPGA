@@ -94,15 +94,18 @@ module drs_iter #(
  S_GKSZ=124, S_GKSD=125,
  S_AAR=126, S_AARW=127,
  S_VR0=128, S_VR1=129, S_VR2=130, S_VR2B=131, S_VR3=132, S_VR4=133, S_VR5=134, S_VR6=135,
- S_VR7=136, S_VR8=137;
+ S_VR7=136, S_VR8=137,
+ S_GKSVX0=139, S_GKSVX1=140, S_GKSVY0=141, S_GKSVY1=142, S_GKSVY2=143,
+ S_GKSRY0=144, S_GKSDY0=145;
     reg [7:0] st;   // 0..136 fits in 8 bits
     // force refactor=1 during a scale-update g recompute (band comes from s_build)
-    wire ks_refactor = refactor || (st == S_GKS0 || st == S_GKSB || st == S_GKSVX ||
-                                    st == S_GKSVY || st == S_GKSZ || st == S_GKSD);
+    reg gks_active;
+    wire ks_refactor = refactor || gks_active;
 
     // ---- sub-blocks ----
     reg  ks_start, ks_band_valid, ks_din_valid;
-    reg  [63:0] ks_band_in, ks_x_in;
+    reg  ks_par_update, ks_ry_valid, ks_dy_valid;
+    reg  [63:0] ks_band_in, ks_x_in, ks_ry_in, ks_dy_in;
     wire [63:0] ks_z_out;
     wire        ks_o_valid, ks_done;
     kkt_solve #(.N(N), .M(M), .NNZ(NNZ), .HB(HB),
@@ -110,6 +113,8 @@ module drs_iter #(
                 .RY_FILE("../data/kkt/full/r_y_r.hex"), .DY_FILE("../data/kkt/full/Dy_r.hex")) u_ks(
         .clk(clk), .rst_n(rst_n), .start(ks_start),
         .band_in(ks_band_in), .band_valid(ks_band_valid), .refactor(ks_refactor),
+        .par_update(ks_par_update), .ry_in(ks_ry_in), .dy_in(ks_dy_in),
+        .ry_valid(ks_ry_valid), .dy_valid(ks_dy_valid),
         .x_in(ks_x_in), .din_valid(ks_din_valid),
         .ram_addr(kkt_addr), .ram_wdata(kkt_wdata), .ram_we(kkt_we),
         .ram_rdata(kkt_rdata),
@@ -204,6 +209,7 @@ module drs_iter #(
  reg rs_done_p, rs_rise;
  reg [15:0] aa_cnt;
  reg [63:0] rinv, zm, vr, vd, vu, vv2;
+ reg scale_valid_p;   // prev scale_valid, for rising-edge detection (level-safe trigger)
     wire pdc_own = (st == S_CONE || st == S_CONEW);
     wire sb_own = (st == S_SB || st == S_SBW);
     always @* begin
@@ -227,6 +233,8 @@ module drs_iter #(
             own_addr <= 0; own_wdata <= 0; own_we <= 0;
             ks_start <= 0; ks_band_valid <= 0; ks_din_valid <= 0;
             ks_band_in <= 0; ks_x_in <= 0;
+            ks_par_update <= 0; ks_ry_valid <= 0; ks_dy_valid <= 0;
+            ks_ry_in <= 0; ks_dy_in <= 0;
             rp_start <= 0; rp_dv <= 0; rp_r <= 0; rp_g <= 0; rp_p <= 0;
             rp_mu <= 0; rp_eta <= 0;
             pdc_start <= 0;
@@ -240,17 +248,19 @@ module drs_iter #(
             cmp_a <= 0; cmp_b <= 0; aa_done_r <= 0;
             rs_done_p <= 0; rs_rise <= 0; aa_cnt <= 0;
             rinv <= 0; zm <= 0; vr <= 0; vd <= 0; vu <= 0; vv2 <= 0;
-            sb_start <= 0; aa_reset_s <= 0;
+            sb_start <= 0; aa_reset_s <= 0; gks_active <= 0; scale_valid_p <= 0;
         end else begin
             ks_start <= 0; ks_band_valid <= 0; ks_din_valid <= 0;
+            ks_ry_valid <= 0; ks_dy_valid <= 0; ks_par_update <= 0;
             rp_start <= 0; rp_dv <= 0; pdc_start <= 0; rs_start <= 0;
             div_start <= 0; sb_start <= 0;
             aa_start <= 0; aa_dv <= 0;
             own_we <= 0;
+            scale_valid_p <= scale_valid;
             case (st)
             S_IDLE: begin
                 done <= 0;
-                if (scale_valid) begin i <= 0; own_addr <= ZMASK_BASE; st <= S_SX0; end
+                if (scale_valid && !scale_valid_p) begin i <= 0; own_addr <= ZMASK_BASE; st <= S_SX0; end
                 else if (start) begin
                     if (iter == 0) begin i <= 0; own_addr <= V_BASE; st <= S_VPC0; end  // FEAS: v_prev=v0, no normalize
                     else if (aa_round) begin i <= 0; own_addr <= VPR_BASE; st <= S_AA0; end  // AA apply first
@@ -581,21 +591,47 @@ module drs_iter #(
                 if (sb_done) begin i <= 0; own_addr <= BAND_BASE; st <= S_GKS0; end
             end
             // ---- KKT: g = KKT^-1[c;-b]  (band from BAND_BASE, rhs c/-b from CB_BASE) ----
-            S_GKS0: begin ks_start <= 1; i <= 0; own_addr <= BAND_BASE; st <= S_GKSB; end
+            // NOTE: kkt_solve solves M·z = [rho_x·v_x; -R_y·v_y]. To get g=M^-1[c;-b]
+            // we must feed v_x = c/rho_x (=c*1e6) and v_y = D_y·b (= -D_y·nb_r), NOT
+            // (c,-b). Feeding (c,-b) yields M^-1[rho_x·c; R_y·b] -> wrong g (g[0]=2.5
+            // vs SW -449.98). Also stream the NEW r_y/D_y (par_update) so zy uses the
+            // rescaled D_y, not the static scale=1 arrays.
+            S_GKS0: begin
+                ks_start <= 1; gks_active <= 1; ks_par_update <= 1;
+                i <= 0; own_addr <= DR_BASE + N; st <= S_GKSRY0;
+            end
+            // stream M r_y (DR_BASE+N) then M D_y (DY_BASE) into kkt_solve's arrays
+            S_GKSRY0: begin
+                ks_ry_in <= ram_rdata; ks_ry_valid <= 1;
+                if (i + 1 >= M) begin i <= 0; own_addr <= DY_BASE; st <= S_GKSDY0; end
+                else begin i <= i + 1; own_addr <= DR_BASE + N + i + 1; st <= S_GKSRY0; end
+            end
+            S_GKSDY0: begin
+                ks_dy_in <= ram_rdata; ks_dy_valid <= 1;
+                if (i + 1 >= M) begin i <= 0; own_addr <= BAND_BASE; st <= S_GKSB; end
+                else begin i <= i + 1; own_addr <= DY_BASE + i + 1; st <= S_GKSDY0; end
+            end
             S_GKSB: begin
                 ks_band_in <= ram_rdata; ks_band_valid <= 1;
-                if (i + 1 >= (HB + 1) * N) begin i <= 0; own_addr <= CB_BASE; st <= S_GKSVX; end
+                if (i + 1 >= (HB + 1) * N) begin i <= 0; own_addr <= CB_BASE; st <= S_GKSVX0; end
                 else begin i <= i + 1; own_addr <= BAND_BASE + i + 1; st <= S_GKSB; end
             end
-            S_GKSVX: begin
-                ks_x_in <= ram_rdata; ks_din_valid <= 1;
-                if (i + 1 >= N) begin i <= 0; own_addr <= CB_BASE + N; st <= S_GKSVY; end
-                else begin i <= i + 1; own_addr <= CB_BASE + i + 1; st <= S_GKSVX; end
+            // v_x[i] = c[i]/rho_x = c[i]*1e6  (1/rho_x = 1e6)
+            S_GKSVX0: begin a2 <= ram_rdata; b2 <= 64'h412E848000000000; st <= S_GKSVX1; end
+            S_GKSVX1: begin
+                ks_x_in <= po2; ks_din_valid <= 1;
+                if (i + 1 >= N) begin i <= 0; own_addr <= CB_BASE + N; st <= S_GKSVY0; end
+                else begin i <= i + 1; own_addr <= CB_BASE + i + 1; st <= S_GKSVX0; end
             end
-            S_GKSVY: begin
-                ks_x_in <= ram_rdata; ks_din_valid <= 1;
+            // v_y[i] = D_y[i]*b[i] = -D_y[i]*nb_r[i]  (nb_r = -b stored at CB_BASE+N)
+            S_GKSVY0: begin vd <= ram_rdata; own_addr <= DY_BASE + i; st <= S_GKSVY1; end
+            S_GKSVY1: begin
+                a1 <= vd; b1 <= (ram_rdata ^ 64'h8000000000000000); st <= S_GKSVY2;
+            end
+            S_GKSVY2: begin
+                ks_x_in <= po1; ks_din_valid <= 1;
                 if (i + 1 >= M) begin i <= 0; st <= S_GKSZ; end
-                else begin i <= i + 1; own_addr <= CB_BASE + N + i + 1; st <= S_GKSVY; end
+                else begin i <= i + 1; own_addr <= CB_BASE + N + i + 1; st <= S_GKSVY0; end
             end
             S_GKSZ: begin
                 if (ks_o_valid) begin
@@ -604,7 +640,7 @@ module drs_iter #(
                 end
             end
             S_GKSD: begin
-                if (ks_done) begin aa_reset_s <= 1; st <= S_AAR; end
+                if (ks_done) begin gks_active <= 0; aa_reset_s <= 1; st <= S_AAR; end
             end
             // ---- anderson reset (clear history, aa_cnt) ----
             S_AAR: begin aa_reset_s <= 1; st <= S_AARW; end
