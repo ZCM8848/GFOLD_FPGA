@@ -88,7 +88,7 @@ module drs_iter #(
  S_SG6=91, S_SG7=92, S_SG8=93, S_SG9=94,
  S_SC0=95, S_SC1=96, S_SC2=97, S_SC3=98,
  S_SCP0=99, S_SCP1=100, S_SCP2=101, S_SCP3=102,
- S_SX0=110, S_SX1=111, S_SX2=112, S_SX3=113, S_SX4=114, S_SX5=115,
+ S_SX0=110, S_SX1=111, S_SX2=112, S_SX3=113, S_SX4=114, S_SX5=115, S_SX6=138,
  S_SB=116, S_SBW=117,
  S_GKS0=118, S_GKSB=119, S_GKSVX=120, S_GKSVXW=121, S_GKSVY=122, S_GKSVYW=123,
  S_GKSZ=124, S_GKSD=125,
@@ -567,7 +567,11 @@ module drs_iter #(
                 own_addr <= DR_BASE + N + i; own_wdata <= po1; own_we <= 1; st <= S_SX5;
             end
             S_SX5: begin
-                own_addr <= DY_BASE + i; own_wdata <= po2; own_we <= 1;
+                // write D_y — must be its OWN state: the else-branch ZMASK forward
+                // address would override DY_BASE+i in the same cycle (double assign).
+                own_addr <= DY_BASE + i; own_wdata <= po2; own_we <= 1; st <= S_SX6;
+            end
+            S_SX6: begin
                 if (i + 1 >= M) begin sb_start <= 1; st <= S_SB; end
                 else begin i <= i + 1; own_addr <= ZMASK_BASE + i + 1; st <= S_SX2; end
             end

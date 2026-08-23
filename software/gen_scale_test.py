@@ -39,6 +39,15 @@ def main():
     g = lu.solve(np.concatenate([cr, -br]))
     aa.reset()
     v[:] = rsk / diag_r + 2 * u_t - u
+    # ---- keep iterating after the scale update (validate band/g path) ----
+    # software v_prev must be the REMAPPED v (mirror drs_iter S_AARW->S_VR0)
+    v_prev = v.copy()
+    for i in range(6, 12):
+        v, u_t, u, rsk = one_iteration(Ab, br, cr, blocks, scale, diag_r, lu,
+                                       g, v, v_prev, i, aa, safeguard=True)
+        with open(f"rtl/data/kkt/full/v_scale{i + 1}.hex", "w") as fh:
+            for x in v: fh.write("%016X\n" % f64(float(x)))
+    print("post-scale iters 6..11 done; wrote v_scale7..v_scale12")
     print("post-scale v", hexs(v[:6]))
     # dump full v for tb comparison
     with open("rtl/data/kkt/full/v_scale0.hex", "w") as fh:
