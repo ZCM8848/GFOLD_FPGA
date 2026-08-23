@@ -93,8 +93,8 @@ module drs_iter #(
  S_GKS0=118, S_GKSB=119, S_GKSVX=120, S_GKSVXW=121, S_GKSVY=122, S_GKSVYW=123,
  S_GKSZ=124, S_GKSD=125,
  S_AAR=126, S_AARW=127,
- S_VR0=128, S_VR1=129, S_VR2=130, S_VR3=131, S_VR4=132, S_VR5=133, S_VR6=134,
- S_VR7=135, S_VR8=136;
+ S_VR0=128, S_VR1=129, S_VR2=130, S_VR2B=131, S_VR3=132, S_VR4=133, S_VR5=134, S_VR6=135,
+ S_VR7=136, S_VR8=137;
     reg [7:0] st;   // 0..136 fits in 8 bits
     // force refactor=1 during a scale-update g recompute (band comes from s_build)
     wire ks_refactor = refactor || (st == S_GKS0 || st == S_GKSB || st == S_GKSVX ||
@@ -244,6 +244,7 @@ module drs_iter #(
         end else begin
             ks_start <= 0; ks_band_valid <= 0; ks_din_valid <= 0;
             rp_start <= 0; rp_dv <= 0; pdc_start <= 0; rs_start <= 0;
+            div_start <= 0; sb_start <= 0;
             aa_start <= 0; aa_dv <= 0;
             own_we <= 0;
             case (st)
@@ -554,11 +555,12 @@ module drs_iter #(
             end
             S_SX2: begin zm <= ram_rdata; st <= S_SX3; end      // zero-cone row mask[i]
             S_SX3: begin
-                // r_y = rinv * (mask? 1e-3 : 1);  D_y = scale * (mask? 1000 : 1)
+                // zmask=1.0 -> zero-cone row: r_y = rinv*1e-3, D_y = scale*1000
+                // zmask=0.0 -> other rows:      r_y = rinv*1,    D_y = scale*1
                 a1 <= rinv;
-                b1 <= (zm == 64'h0) ? 64'h3F50624DD2F1A9FC : 64'h3FF0000000000000;
+                b1 <= (zm == 64'h0) ? 64'h3FF0000000000000 : 64'h3F50624DD2F1A9FC;
                 a2 <= scale_r;
-                b2 <= (zm == 64'h0) ? 64'h408F400000000000 : 64'h3FF0000000000000;
+                b2 <= (zm == 64'h0) ? 64'h3FF0000000000000 : 64'h408F400000000000;
                 st <= S_SX4;
             end
             S_SX4: begin
@@ -567,7 +569,7 @@ module drs_iter #(
             S_SX5: begin
                 own_addr <= DY_BASE + i; own_wdata <= po2; own_we <= 1;
                 if (i + 1 >= M) begin sb_start <= 1; st <= S_SB; end
-                else begin i <= i + 1; own_addr <= ZMASK_BASE + i; st <= S_SX2; end
+                else begin i <= i + 1; own_addr <= ZMASK_BASE + i + 1; st <= S_SX2; end
             end
             // ---- s_build: rebuild S band into BAND_BASE ----
             S_SB: begin sb_start <= 1; st <= S_SBW; end
@@ -611,8 +613,12 @@ module drs_iter #(
             S_VR0: begin i <= 0; own_addr <= RSK_BASE; st <= S_VR1; end
             S_VR1: begin vr <= ram_rdata; own_addr <= DR_BASE + i; st <= S_VR2; end
             S_VR2: begin
-                vd <= ram_rdata; div_a <= vr; div_b <= vd; div_start <= 1;
-                own_addr <= UT_BASE + i; st <= S_VR3;
+                vd <= ram_rdata; div_a <= vr;
+                own_addr <= UT_BASE + i; st <= S_VR2B;
+            end
+            S_VR2B: begin
+                // div_b must use the fresh vd (vd updates at S_VR2) — one cycle later
+                div_b <= vd; div_start <= 1; st <= S_VR3;
             end
             S_VR3: begin vu <= ram_rdata; own_addr <= U_BASE + i; st <= S_VR4; end
             S_VR4: begin vv2 <= ram_rdata; a1 <= vu; b1 <= 64'h4000000000000000; st <= S_VR5; end
@@ -625,7 +631,7 @@ module drs_iter #(
             end
             S_VR8: begin
                 if (i + 1 >= L) st <= S_DONE;
-                else begin i <= i + 1; own_addr <= RSK_BASE + i; st <= S_VR1; end
+                else begin i <= i + 1; own_addr <= RSK_BASE + i + 1; st <= S_VR1; end
             end
 
             S_DONE: begin done <= 1; st <= S_IDLE; end

@@ -69,17 +69,22 @@ module tb_drs_iter;
         for (k = 0; k < M; k = k + 1) smem[dut.CB_BASE + N + k] = nb[k];
         for (k = 0; k < M; k = k + 1) smem[dut.ZMASK_BASE + k] = zmask[k];
         rst_n = 0; repeat (4) @(negedge clk); rst_n = 1;
-        // 5 iterations, then trigger one scale update (flow check)
-        for (k = 0; k < 5; k = k + 1) begin
+        // 6 iterations, then trigger one scale update (matches gen_scale_test replay)
+        for (k = 0; k < 6; k = k + 1) begin
             run_iter(k, (k == 0) ? 1 : 0);
             $write("V%0d:", k + 1);
             for (i = 0; i < L; i = i + 1) $write(" %h", smem[i]);
             $write("\n");
         end
         // scale update (scale=0.1787, first SW update value)
+        while (done) @(posedge clk);      // wait done to drop (S_IDLE)
         scale_r = 64'h3FC6E1050A6F9809; scale_valid = 1;
-        while (!done) @(posedge clk);
+        while (!done) @(posedge clk);     // wait scale update completes
         scale_valid = 0; @(posedge clk); @(posedge clk);
+        $write("VS:");
+        for (i = 0; i < L; i = i + 1) $write(" %h", smem[i]);
+        $write("\n");
+        $write("DR1114: %h %h %h\n", smem[dut.DR_BASE + 1114], smem[dut.RSK_BASE + 1114], smem[dut.UT_BASE + 1114]);
         $display("SCALE DONE");
         $display("ALL DONE");
         $finish;
