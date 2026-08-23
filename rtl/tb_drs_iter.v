@@ -23,7 +23,7 @@ module tb_drs_iter;
         .ram_addr(ram_addr), .ram_wdata(ram_wdata), .ram_we(ram_we), .ram_rdata(ram_rdata),
         .kkt_addr(kkt_addr), .kkt_wdata(kkt_wdata), .kkt_we(kkt_we), .kkt_rdata(kkt_rdata),
         .done(done));
-    reg [63:0] smem [0:65535];
+    reg [63:0] smem [0:131071];
     always @(posedge clk) if (ram_we) smem[ram_addr] <= ram_wdata;
     assign ram_rdata = smem[ram_addr];
     reg [63:0] kmem [0:32767];
@@ -53,6 +53,11 @@ module tb_drs_iter;
             while (!done) @(posedge clk);
         end
     endtask
+
+    // ---- spmv debug probe (residual computation) ----
+    always @(posedge clk) begin
+        if (dut.u_saty.st != 0 || dut.u_sax.st != 0) begin end
+    end
 
     initial begin
         $readmemh("../data/kkt/full/v0.hex", v0);
@@ -91,8 +96,17 @@ module tb_drs_iter;
         $display("SCALE DONE");
         // keep iterating after scale update (validate band/g path; first real
         // safeguard fires at iter110 = 11th AA apply)
-        for (k = 6; k < 116; k = k + 1) begin
+        for (k = 6; k < 116; k = k + 1) begin      // residual check at iter25/50/75/100
             run_iter(k, 0);               // refactor=0: reuse L/D from the scale-update refactor
+            if (k % 25 == 0 && k > 0) begin
+                while (dut.st !== dut.S_IDLE) @(posedge clk);
+                $display("SCL%0d: max_ax=%h max_s=%h max_axs=%h max_aty=%h max_px=%h rel_pri=%h rel_dual=%h",
+                         k, dut.max_ax, dut.max_s, dut.max_axs, dut.max_aty, dut.max_px, dut.rel_pri, dut.rel_dual);
+                $display("SPMV%0d: aty0=%h aty1=%h aty2=%h x0=%h x1=%h saty_st=%0d sax_st=%0d satyact=%b saxact=%b",
+                         k, smem[dut.SCALE_BASE+dut.LMAX+0], smem[dut.SCALE_BASE+dut.LMAX+1],
+                         smem[dut.SCALE_BASE+dut.LMAX+2], smem[dut.SCALE_BASE+0], smem[dut.SCALE_BASE+1],
+                         dut.u_saty.st, dut.u_sax.st, dut.saty_active, dut.sax_active);
+            end
             $write("VS%0d:", k + 1);
             for (i = 0; i < L; i = i + 1) $write(" %h", smem[i]);
             $write("\n");

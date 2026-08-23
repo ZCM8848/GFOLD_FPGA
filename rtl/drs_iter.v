@@ -28,7 +28,7 @@ module drs_iter #(
     parameter N = 1100, M = 2107, NNZ = 4783, HB = 17,
     parameter L = N + M + 1,
     parameter LM1 = L - 1,
-    parameter RAM_AW = 16,
+    parameter RAM_AW = 17,
     parameter SQRT_L = 64'h404c51d19a043914,   // sqrt(L), L=3208
     parameter AROW_FILE = "../data/kkt/full/Arow.hex",
     parameter ACOL_FILE = "../data/kkt/full/Acol.hex",
@@ -66,7 +66,14 @@ module drs_iter #(
     localparam BAND_BASE = CB_BASE + LM1;          // s_build band output (19800 words)
     localparam DY_BASE = BAND_BASE + (HB + 1) * N; // D_y for s_build (M words)
     localparam ZMASK_BASE = DY_BASE + M;           // zero-cone row mask (M words, 0/1)
+    localparam LMAX = (N > M) ? N : M;             // = M for the G-FOLD problem
+    // spmv workspace for the adaptive-scale residual: reused for A^Ty then Ax.
+    // needs LMAX + LMAX words (spmv x@[0,LENX) + out@[LMAX,LMAX+LENO)).
+    localparam SCALE_BASE = ZMASK_BASE + M;
     localparam AA_SAFEGUARD = 64'h3FF0000000000000;  // 1.0 (scs_faithful AA_SAFEGUARD)
+    localparam NM_B = 64'h40A2C00000000000;  // max|b| = 2400.0 (reordered frame)
+    localparam NM_C = 64'h3FF0000000000000;  // max|c| = 1.0
+    localparam LN10 = 64'h40026BB1BBB55516;  // ln(10) = 2.302585093
 
     // ---- FSM state definitions (moved up so sub-block ports can use st) ----
     localparam S_IDLE=0, S_NM0=1, S_NM1=2, S_NM2=3, S_NM3=4, S_NM4=67, S_NMR=5, S_NMRW=6,
@@ -96,7 +103,16 @@ module drs_iter #(
  S_VR0=128, S_VR1=129, S_VR2=130, S_VR2B=131, S_VR3=132, S_VR4=133, S_VR5=134, S_VR6=135,
  S_VR7=136, S_VR8=137,
  S_GKSVX0=139, S_GKSVX1=140, S_GKSVY0=141, S_GKSVY1=142, S_GKSVY2=143,
- S_GKSRY0=144, S_GKSDY0=145;
+ S_GKSRY0=144, S_GKSDY0=145,
+ S_SCL0=150, S_SCLY0=151, S_SCLY1=152, S_SCLT=153,
+ S_SCLD0=154, S_SCLD1=155, S_SCLD2=156, S_SCLD3=157, S_SCLD4=158, S_SCLD5=159,
+ S_SCLX0=160, S_SCLX1=161,
+ S_SCLP0=162, S_SCLP1=163, S_SCLP2=164, S_SCLP3=165, S_SCLP4=166, S_SCLP5=167,
+ S_SCLP6=168, S_SCLP7=169, S_SCLP8=170,
+ S_SCLR0=171, S_SCLR1=172, S_SCLR2=173, S_SCLR3=174, S_SCLR4=175, S_SCLR5=176,
+ S_SCLR6=177, S_SCLR7=178, S_SCLR8=179, S_SCLR9=180, S_SCLR10=181,
+ S_SCLY2=182, S_SCLX2=183, S_SCLY3=184, S_SCLX3=185, S_SCLY4=186, S_SCLX4=187,
+ S_SCLD1b=188, S_SCLP2b=189;
     reg [7:0] st;   // 0..136 fits in 8 bits
     // force refactor=1 during a scale-update g recompute (band comes from s_build)
     reg gks_active;
@@ -132,6 +148,23 @@ module drs_iter #(
         .clk(clk), .rst_n(rst_n), .start(sb_start),
         .ram_addr(sb_addr), .ram_wdata(sb_wdata), .ram_we(sb_we), .ram_rdata(ram_rdata),
         .done(sb_done));
+
+    // ---- spmv for adaptive-scale residual: A^T y (transpose=1) then A x
+    //      (transpose=0), both reusing SCALE_BASE workspace (sequential) ----
+    reg  saty_start, saty_din_valid; reg [63:0] saty_x_in;
+    wire [12:0] saty_addr; wire [63:0] saty_wdata; wire saty_we, saty_done;   // 13-bit: spmv ram_addr width
+    spmv_fp64 #(.N(N), .M(M), .NNZ(NNZ), .transpose(1),
+                .AROW_FILE(AROW_FILE), .ACOL_FILE(ACOL_FILE), .AVAL_FILE(AVAL_FILE)) u_saty(
+        .clk(clk), .rst_n(rst_n), .start(saty_start), .x_in(saty_x_in), .din_valid(saty_din_valid),
+        .ram_addr(saty_addr), .ram_wdata(saty_wdata), .ram_we(saty_we), .ram_rdata(ram_rdata),
+        .out_out(), .o_valid(), .done(saty_done));
+    reg  sax_start, sax_din_valid; reg [63:0] sax_x_in;
+    wire [12:0] sax_addr; wire [63:0] sax_wdata; wire sax_we, sax_done;   // 13-bit: spmv ram_addr width
+    spmv_fp64 #(.N(N), .M(M), .NNZ(NNZ), .transpose(0),
+                .AROW_FILE(AROW_FILE), .ACOL_FILE(ACOL_FILE), .AVAL_FILE(AVAL_FILE)) u_sax(
+        .clk(clk), .rst_n(rst_n), .start(sax_start), .x_in(sax_x_in), .din_valid(sax_din_valid),
+        .ram_addr(sax_addr), .ram_wdata(sax_wdata), .ram_we(sax_we), .ram_rdata(ram_rdata),
+        .out_out(), .o_valid(), .done(sax_done));
 
     reg  rp_start, rp_dv;
     reg  [63:0] rp_r, rp_g, rp_p, rp_mu, rp_eta;
@@ -195,10 +228,11 @@ module drs_iter #(
     wire [63:0] rs_o;
     fp64_rsqrt urs(clk, rs_start, rs_in, rs_done, rs_o);
 
-    // ---- RAM port mux: own | pdc (base U_BASE+N) ----
+    // ---- RAM port mux: own | pdc (base U_BASE+N) | sb | saty | sax ----
     reg [RAM_AW-1:0] own_addr;
     reg [63:0] own_wdata;
     reg own_we;
+    reg saty_active, sax_active;   // set by the scale-residual FSM while a spmv drives RAM
 
     // ---- FSM ---- (state defs at module top; see S_IDLE etc above)
     reg [15:0] i;
@@ -210,7 +244,20 @@ module drs_iter #(
  reg [15:0] aa_cnt;
  reg [63:0] rinv, zm, vr, vd, vu, vv2;
  reg scale_valid_p;   // prev scale_valid, for rising-edge detection (level-safe trigger)
-    wire pdc_own = (st == S_CONE || st == S_CONEW);
+ reg scale_flow;      // 1 while the scale-update chain runs (suppress residual check at its S_DONE)
+ // ---- adaptive-scale residual / decision regs ----
+ reg [63:0] max_aty, max_px, max_ax, max_s, max_axs;
+ reg [63:0] denom_pri, denom_dual, rel_pri, rel_dual;
+ reg [63:0] sum_log_r, scale_cur, tau_scl, new_scale;
+ reg signed [15:0] n_log_r, last_scale_iter;
+ reg [63:0] aty_i, c_i, ax_i, s_i, nb_i;
+ reg [63:0] saty_pf, sax_pf;
+ wire [63:0] log_relp, log_reld, exp_arg, exp_out, newscale_mul;
+ fp64_log ulogp(rel_pri, log_relp);      // log(rel_pri)   (combinational)
+ fp64_log ulogd(rel_dual, log_reld);     // log(rel_dual)
+ fp64_exp  uexp(exp_arg, exp_out);       // exp(sum_log/(2n))
+ fp64_mul unm(scale_cur, exp_out, newscale_mul);   // scale * exp(...)
+ wire pdc_own = (st == S_CONE || st == S_CONEW);
     wire sb_own = (st == S_SB || st == S_SBW);
     always @* begin
         if (sb_own) begin
@@ -219,6 +266,14 @@ module drs_iter #(
             ram_addr = U_BASE + N + pdc_addr;
             ram_wdata = pdc_wdata;
             ram_we = pdc_we;
+        end else if (saty_active) begin
+            ram_addr = SCALE_BASE + saty_addr;
+            ram_wdata = saty_wdata;
+            ram_we = saty_we;
+        end else if (sax_active) begin
+            ram_addr = SCALE_BASE + sax_addr;
+            ram_wdata = sax_wdata;
+            ram_we = sax_we;
         end else begin
             ram_addr = own_addr;
             ram_wdata = own_wdata;
@@ -248,19 +303,28 @@ module drs_iter #(
             cmp_a <= 0; cmp_b <= 0; aa_done_r <= 0;
             rs_done_p <= 0; rs_rise <= 0; aa_cnt <= 0;
             rinv <= 0; zm <= 0; vr <= 0; vd <= 0; vu <= 0; vv2 <= 0;
-            sb_start <= 0; aa_reset_s <= 0; gks_active <= 0; scale_valid_p <= 0;
+            sb_start <= 0; aa_reset_s <= 0; gks_active <= 0; scale_valid_p <= 0; scale_flow <= 0;
+            saty_start <= 0; saty_din_valid <= 0; saty_x_in <= 0; saty_active <= 0;
+            sax_start <= 0; sax_din_valid <= 0; sax_x_in <= 0; sax_active <= 0;
+            max_aty <= 0; max_px <= 0; max_ax <= 0; max_s <= 0; max_axs <= 0;
+            denom_pri <= 0; denom_dual <= 0; rel_pri <= 0; rel_dual <= 0;
+            sum_log_r <= 0; scale_cur <= 0; tau_scl <= 0; new_scale <= 0;
+            n_log_r <= 0; last_scale_iter <= 0; aty_i <= 0; c_i <= 0; ax_i <= 0; s_i <= 0; nb_i <= 0;
         end else begin
             ks_start <= 0; ks_band_valid <= 0; ks_din_valid <= 0;
             ks_ry_valid <= 0; ks_dy_valid <= 0; ks_par_update <= 0;
             rp_start <= 0; rp_dv <= 0; pdc_start <= 0; rs_start <= 0;
             div_start <= 0; sb_start <= 0;
+            saty_start <= 0; saty_din_valid <= 0;
+            sax_start <= 0; sax_din_valid <= 0;
             aa_start <= 0; aa_dv <= 0;
             own_we <= 0;
             scale_valid_p <= scale_valid;
             case (st)
             S_IDLE: begin
                 done <= 0;
-                if (scale_valid && !scale_valid_p) begin i <= 0; own_addr <= ZMASK_BASE; st <= S_SX0; end
+                scale_flow <= 0;
+                if (scale_valid && !scale_valid_p) begin scale_cur <= scale_r; i <= 0; own_addr <= ZMASK_BASE; st <= S_SX0; end
                 else if (start) begin
                     if (iter == 0) begin i <= 0; own_addr <= V_BASE; st <= S_VPC0; end  // FEAS: v_prev=v0, no normalize
                     else if (aa_round) begin i <= 0; own_addr <= VPR_BASE; st <= S_AA0; end  // AA apply first
@@ -565,6 +629,7 @@ module drs_iter #(
             // rebuild band (s_build), g = KKT^-1[c;-b], aa.reset, v remap ============
             S_SX0: begin
                 // rinv = 1/scale (one division)
+                scale_flow <= 1; scale_cur <= scale_r;
                 div_a <= 64'h3FF0000000000000; div_b <= scale_r; div_start <= 1;
                 i <= 0; own_addr <= ZMASK_BASE; st <= S_SX1;
             end
@@ -682,7 +747,108 @@ module drs_iter #(
                 else begin i <= i + 1; own_addr <= RSK_BASE + i + 1; st <= S_VR1; end
             end
 
-            S_DONE: begin done <= 1; st <= S_IDLE; end
+            S_DONE: begin
+                done <= 1;
+                if (iter % 25 == 0 && iter > 0 && !scale_flow) begin
+                    i <= 0; own_addr <= U_BASE + N; st <= S_SCL0;
+                end else st <= S_IDLE;
+            end
+            // ============ adaptive-scale residual (every 25 iters) ============
+            // After a completed iteration (u/rsk updated): compute
+            //   max_aty=max|A^Ty|, max_px=max|A^Ty+tau*c|  (dual, over N)
+            //   max_ax=max|Ax|, max_s=max|s|, max_axs=max|Ax+s+tau*nb|  (primal, over M)
+            //   denom_pri=max(max_ax,max_s,nm_b*tau); rel_pri=max_axs/denom_pri
+            //   denom_dual=max(max_aty,nm_c*tau);      rel_dual=max_px/denom_dual
+            // (b stored as nb=-b at CB_BASE+N, so ax_s_btau = Ax+s+tau*nb)
+            S_SCL0: begin done <= 0; saty_start <= 1; i <= 0; own_addr <= U_BASE + N; st <= S_SCLY0; end
+            // 4-cycle feed per element: RD(read u, own mux) -> FEED(spmv x_in) ->
+            // SAMP(spmv samples din_valid, mux held) -> WR(spmv ram_we takes effect,
+            // mux held) so the delayed spmv write and the u-read never collide.
+            S_SCLY0: begin saty_pf <= ram_rdata; st <= S_SCLY1; end
+            S_SCLY1: begin saty_x_in <= saty_pf; saty_din_valid <= 1; saty_active <= 1; st <= S_SCLY2; end
+            S_SCLY2: begin saty_active <= 1; st <= S_SCLY3; end
+            S_SCLY3: begin
+                if (i + 1 >= M) begin i <= 0; saty_active <= 1; st <= S_SCLY4; end
+                else begin saty_active <= 0; i <= i + 1; own_addr <= U_BASE + N + i + 1; st <= S_SCLY0; end
+            end
+            S_SCLY4: begin
+                if (saty_done) begin
+                    saty_active <= 0; max_aty <= 0; max_px <= 0;
+                    i <= 0; own_addr <= U_BASE + LM1; st <= S_SCLT;
+                end
+            end
+            S_SCLT: begin tau_scl <= ram_rdata; i <= 0; own_addr <= SCALE_BASE + LMAX; st <= S_SCLD0; end
+            S_SCLD0: begin aty_i <= ram_rdata; own_addr <= CB_BASE + i; st <= S_SCLD1; end
+            S_SCLD1: begin c_i <= ram_rdata; a1 <= tau_scl; st <= S_SCLD1b; end
+            S_SCLD1b: begin b1 <= c_i; st <= S_SCLD2; end
+            S_SCLD2: begin sa <= aty_i; sb <= po1; ssub <= 0; st <= S_SCLD3; end
+            S_SCLD3: begin cmp_a <= {1'b0, aty_i[62:0]}; cmp_b <= max_aty; st <= S_SCLD4; end
+            S_SCLD4: begin
+                max_aty <= cmp_gt ? {1'b0, aty_i[62:0]} : max_aty;
+                cmp_a <= {1'b0, so1[62:0]}; cmp_b <= max_px; st <= S_SCLD5;
+            end
+            S_SCLD5: begin
+                max_px <= cmp_gt ? {1'b0, so1[62:0]} : max_px;
+                if (i + 1 >= N) begin i <= 0; sax_start <= 1; own_addr <= U_BASE; st <= S_SCLX0; end
+                else begin i <= i + 1; own_addr <= SCALE_BASE + LMAX + i + 1; st <= S_SCLD0; end
+            end
+            S_SCLX0: begin sax_pf <= ram_rdata; st <= S_SCLX1; end
+            S_SCLX1: begin sax_x_in <= sax_pf; sax_din_valid <= 1; sax_active <= 1; st <= S_SCLX2; end
+            S_SCLX2: begin sax_active <= 1; st <= S_SCLX3; end
+            S_SCLX3: begin
+                if (i + 1 >= N) begin i <= 0; sax_active <= 1; st <= S_SCLX4; end
+                else begin sax_active <= 0; i <= i + 1; own_addr <= U_BASE + i + 1; st <= S_SCLX0; end
+            end
+            S_SCLX4: begin
+                if (sax_done) begin
+                    sax_active <= 0; max_ax <= 0; max_s <= 0; max_axs <= 0;
+                    i <= 0; own_addr <= SCALE_BASE + LMAX; st <= S_SCLP0;
+                end
+            end
+            S_SCLP0: begin ax_i <= ram_rdata; own_addr <= RSK_BASE + N + i; st <= S_SCLP1; end
+            S_SCLP1: begin s_i <= ram_rdata; own_addr <= CB_BASE + N + i; st <= S_SCLP2; end
+            S_SCLP2: begin nb_i <= ram_rdata; a1 <= tau_scl; st <= S_SCLP2b; end
+            S_SCLP2b: begin b1 <= nb_i; st <= S_SCLP3; end
+            S_SCLP3: begin sa <= s_i; sb <= po1; ssub <= 0; st <= S_SCLP4; end      // s + tau*nb -> so1
+            S_SCLP4: begin sc <= ax_i; sd <= so1; ssub2 <= 0; st <= S_SCLP5; end    // axs = ax + so1 -> so2
+            S_SCLP5: begin cmp_a <= {1'b0, ax_i[62:0]}; cmp_b <= max_ax; st <= S_SCLP6; end
+            S_SCLP6: begin
+                max_ax <= cmp_gt ? {1'b0, ax_i[62:0]} : max_ax;
+                cmp_a <= {1'b0, s_i[62:0]}; cmp_b <= max_s; st <= S_SCLP7;
+            end
+            S_SCLP7: begin
+                max_s <= cmp_gt ? {1'b0, s_i[62:0]} : max_s;
+                cmp_a <= {1'b0, so2[62:0]}; cmp_b <= max_axs; st <= S_SCLP8;
+            end
+            S_SCLP8: begin
+                max_axs <= cmp_gt ? {1'b0, so2[62:0]} : max_axs;
+                if (i + 1 >= M) st <= S_SCLR0;
+                else begin i <= i + 1; own_addr <= SCALE_BASE + LMAX + i + 1; st <= S_SCLP0; end
+            end
+            // rel_pri / rel_dual (fp64_div, ARM'd for the level-done)
+            S_SCLR0: begin a1 <= NM_B; b1 <= tau_scl; st <= S_SCLR1; end
+            S_SCLR1: begin cmp_a <= max_ax; cmp_b <= max_s; st <= S_SCLR2; end
+            S_SCLR2: begin
+                denom_pri <= (cmp_gt ? max_ax : max_s);
+                cmp_a <= po1; cmp_b <= (cmp_gt ? max_ax : max_s); st <= S_SCLR3;
+            end
+            S_SCLR3: begin denom_pri <= (cmp_gt ? po1 : denom_pri); st <= S_SCLR4; end
+            S_SCLR4: begin div_a <= max_axs; div_b <= denom_pri; div_start <= 1; st <= S_SCLR5; end
+            S_SCLR5: begin if (!div_done) st <= S_SCLR6; else st <= S_SCLR5; end
+            S_SCLR6: begin
+                if (div_done) begin rel_pri <= div_o; a1 <= NM_C; b1 <= tau_scl; st <= S_SCLR7; end
+                else st <= S_SCLR6;
+            end
+            S_SCLR7: begin cmp_a <= max_aty; cmp_b <= po1; st <= S_SCLR8; end
+            S_SCLR8: begin
+                denom_dual <= (cmp_gt ? max_aty : po1);
+                div_a <= max_px; div_b <= (cmp_gt ? max_aty : po1); div_start <= 1; st <= S_SCLR9;
+            end
+            S_SCLR9: begin if (!div_done) st <= S_SCLR10; else st <= S_SCLR9; end
+            S_SCLR10: begin
+                if (div_done) begin rel_dual <= div_o; st <= S_IDLE; end
+                else st <= S_SCLR10;
+            end
             default: st <= S_IDLE;
             endcase
         end
