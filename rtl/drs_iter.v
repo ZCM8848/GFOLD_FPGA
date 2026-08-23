@@ -520,11 +520,17 @@ module drs_iter #(
             end
             S_SG6: begin rs_start <= 1; rs_in <= gacc; st <= S_SG7; end
             S_SG7: begin
-                if (rs_done) begin
-                    a2 <= norm_g_r; b2 <= AA_SAFEGUARD; cmp_a <= rs_o; st <= S_SG8;
+                rs_done_p <= rs_done;
+                if (rs_done && !rs_done_p) begin
+                    // safeguard reject iff ||diff|| > AA_SAFEGUARD*||x-f|| (scs_faithful).
+                    // norm_g_r = 1/||x-f|| and rs_o = 1/||diff|| are rsqrt RECIPROCALS,
+                    // so reject iff 1/||x-f|| > 1/||diff||  i.e. cmp_a(=1/||x-f||)
+                    // > cmp_b(=1/||diff||). AA_SAFEGUARD=1.0 so norm_g_r*AA_SAFEGUARD
+                    // == norm_g_r. FIX: cmp_a<=po2(threshold side), cmp_b<=rs_o(diff side).
+                    a2 <= norm_g_r; b2 <= AA_SAFEGUARD; cmp_b <= rs_o; st <= S_SG8;
                 end
             end
-            S_SG8: begin cmp_b <= po2; st <= S_SG9; end
+            S_SG8: begin cmp_a <= po2; st <= S_SG9; end
             S_SG9: begin
                 // scs_faithful.safeguard returns early unless the LAST apply
                 // actually solved (self.success), which happens only from the
@@ -541,7 +547,9 @@ module drs_iter #(
             end
             S_SC3: begin
                 if (i + 1 >= L) st <= S_SCP0;
-                else begin i <= i + 1; own_addr <= SAFEV_BASE + i; st <= S_SC1; end
+                // forward-addr MUST be BASE+i+1 (non-blocking i and addr update
+                // in the same cycle with the OLD i; +1 pre-reads the NEXT element)
+                else begin i <= i + 1; own_addr <= SAFEV_BASE + i + 1; st <= S_SC1; end
             end
             S_SCP0: begin i <= 0; own_addr <= SAFEVP_BASE; st <= S_SCP1; end
             S_SCP1: begin vv <= ram_rdata; own_addr <= VPR_BASE + i; st <= S_SCP2; end
@@ -550,7 +558,7 @@ module drs_iter #(
             end
             S_SCP3: begin
                 if (i + 1 >= L) st <= S_DONE;
-                else begin i <= i + 1; own_addr <= SAFEVP_BASE + i; st <= S_SCP1; end
+                else begin i <= i + 1; own_addr <= SAFEVP_BASE + i + 1; st <= S_SCP1; end
             end
 
             // ============ scale update: recompute diag_r[n:n+m] + D_y, then
