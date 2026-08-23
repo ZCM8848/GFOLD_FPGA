@@ -89,8 +89,8 @@ module tb_drs_iter;
         $write("B0: %h %h %h %h %h\n", smem[dut.BAND_BASE + 0], smem[dut.BAND_BASE + 1], smem[dut.BAND_BASE + 2], smem[dut.BAND_BASE + (17)*0 + 1100], smem[dut.BAND_BASE + (17)*1100 + 0]);
         $write("DY0: %h %h %h\n", smem[dut.DY_BASE + 0], smem[dut.DY_BASE + 1], smem[dut.DY_BASE + 2]);
         $display("SCALE DONE");
-        // keep iterating after scale update (validate band/g path)
-        for (k = 6; k < 12; k = k + 1) begin
+        // keep iterating after scale update (validate band/g path, 30 total)
+        for (k = 6; k < 31; k = k + 1) begin
             run_iter(k, 0);               // refactor=0: reuse L/D from the scale-update refactor
             $write("VS%0d:", k + 1);
             for (i = 0; i < L; i = i + 1) $write(" %h", smem[i]);
