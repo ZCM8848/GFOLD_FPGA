@@ -97,3 +97,5 @@ rtl/tb_ldl_debug.v
 rtl/transcript
 software/run_sens20k.py
 software/run_sens_3e5.py
+rtl/sim/drsi_dump.txt
+rtl/sim/vsim.wlf
