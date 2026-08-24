@@ -7,13 +7,14 @@
 module tb_drs_iter;
     parameter N = 1100, M = 2107, NNZ = 4783, HB = 17;
     parameter L = N + M + 1, LM1 = L - 1;
+    parameter integer ITERS = 401;   // total iterations to run (Verilator sweep)
     reg clk = 0, rst_n = 0;
     always #5 clk = ~clk;
     reg start = 0, refactor = 0, band_valid = 0;
     reg [63:0] band_in;
     reg [15:0] iter = 0;
     reg scale_valid = 0; reg [63:0] scale_r = 64'h3FF0000000000000;
-    wire [15:0] ram_addr; wire [63:0] ram_wdata; wire ram_we; wire [63:0] ram_rdata;
+    wire [16:0] ram_addr; wire [63:0] ram_wdata; wire ram_we; wire [63:0] ram_rdata;
     wire [13:0] kkt_addr; wire [63:0] kkt_wdata; wire kkt_we; wire [63:0] kkt_rdata;
     wire done;
     drs_iter #(.N(N), .M(M), .NNZ(NNZ), .HB(HB)) dut(
@@ -59,6 +60,16 @@ module tb_drs_iter;
         if (dut.u_saty.st != 0 || dut.u_sax.st != 0) begin end
     end
 
+    // ---- scale-chain probe: remap div + rinv at iter25 (numeric states) ----
+    reg prev_vr0 = 0;
+    always @(posedge clk) begin
+        if (dut.st == 128 && !prev_vr0)
+            $display("ST128 iter=%0d i=%0d rinv=%h scale=%h", dut.iter, dut.i, dut.rinv, dut.scale_cur);
+        if (dut.st == 111)
+            $display("ST111 iter=%0d rinv=%h scale=%h", dut.iter, dut.rinv, dut.scale_cur);
+        prev_vr0 <= (dut.st == 128);
+    end
+
     initial begin
         $readmemh("../data/kkt/full/v0.hex", v0);
         $readmemh("../data/kkt/full/g.hex", g);
@@ -74,42 +85,14 @@ module tb_drs_iter;
         for (k = 0; k < M; k = k + 1) smem[dut.CB_BASE + N + k] = nb[k];
         for (k = 0; k < M; k = k + 1) smem[dut.ZMASK_BASE + k] = zmask[k];
         rst_n = 0; repeat (4) @(negedge clk); rst_n = 1;
-        // 6 iterations, then trigger one scale update (matches gen_scale_test replay)
-        for (k = 0; k < 6; k = k + 1) begin
+        // generalized: run ITERS iterations, dump every 25 (scale-check iters) + last 3
+        for (k = 0; k < ITERS; k = k + 1) begin
             run_iter(k, (k == 0) ? 1 : 0);
-            $write("V%0d:", k + 1);
-            for (i = 0; i < L; i = i + 1) $write(" %h", smem[i]);
-            $write("\n");
-        end
-        // scale update (scale=0.1787, first SW update value)
-        while (done) @(posedge clk);      // wait done to drop (S_IDLE)
-        scale_r = 64'h3FC6E1050A6F9809; scale_valid = 1;
-        while (!done) @(posedge clk);     // wait scale update completes
-        scale_valid = 0; @(posedge clk); @(posedge clk);
-        $write("VS:");
-        for (i = 0; i < L; i = i + 1) $write(" %h", smem[i]);
-        $write("\n");
-        $write("DR1114: %h %h %h\n", smem[dut.DR_BASE + 1114], smem[dut.RSK_BASE + 1114], smem[dut.UT_BASE + 1114]);
-        $write("G0: %h %h %h\n", smem[dut.G_BASE + 0], smem[dut.G_BASE + 1], smem[dut.G_BASE + 2]);
-        $write("B0: %h %h %h %h %h\n", smem[dut.BAND_BASE + 0], smem[dut.BAND_BASE + 1], smem[dut.BAND_BASE + 2], smem[dut.BAND_BASE + (17)*0 + 1100], smem[dut.BAND_BASE + (17)*1100 + 0]);
-        $write("DY0: %h %h %h\n", smem[dut.DY_BASE + 0], smem[dut.DY_BASE + 1], smem[dut.DY_BASE + 2]);
-        $display("SCALE DONE");
-        // keep iterating after scale update (validate band/g path; first real
-        // safeguard fires at iter110 = 11th AA apply)
-        for (k = 6; k < 116; k = k + 1) begin      // residual check at iter25/50/75/100
-            run_iter(k, 0);               // refactor=0: reuse L/D from the scale-update refactor
-            if (k % 25 == 0 && k > 0) begin
-                while (dut.st !== dut.S_IDLE) @(posedge clk);
-                $display("SCL%0d: max_ax=%h max_s=%h max_axs=%h max_aty=%h max_px=%h rel_pri=%h rel_dual=%h",
-                         k, dut.max_ax, dut.max_s, dut.max_axs, dut.max_aty, dut.max_px, dut.rel_pri, dut.rel_dual);
-                $display("SPMV%0d: aty0=%h aty1=%h aty2=%h x0=%h x1=%h saty_st=%0d sax_st=%0d satyact=%b saxact=%b",
-                         k, smem[dut.SCALE_BASE+dut.LMAX+0], smem[dut.SCALE_BASE+dut.LMAX+1],
-                         smem[dut.SCALE_BASE+dut.LMAX+2], smem[dut.SCALE_BASE+0], smem[dut.SCALE_BASE+1],
-                         dut.u_saty.st, dut.u_sax.st, dut.saty_active, dut.sax_active);
+            if (k % 25 == 0 || k >= ITERS - 3) begin
+                $write("VS%0d:", k + 1);
+                for (i = 0; i < L; i = i + 1) $write(" %h", smem[i]);
+                $write("\n");
             end
-            $write("VS%0d:", k + 1);
-            for (i = 0; i < L; i = i + 1) $write(" %h", smem[i]);
-            $write("\n");
         end
         $display("ALL DONE");
         $finish;

@@ -74,6 +74,8 @@ module drs_iter #(
     localparam NM_B = 64'h40A2C00000000000;  // max|b| = 2400.0 (reordered frame)
     localparam NM_C = 64'h3FF0000000000000;  // max|c| = 1.0
     localparam LN10 = 64'h40026BB1BBB55516;  // ln(10) = 2.302585093
+    localparam SC_MIN = 64'h3EB0C6F7A0B5ED8D;  // 1e-6
+    localparam SC_MAX = 64'h412E848000000000;  // 1e6
 
     // ---- FSM state definitions (moved up so sub-block ports can use st) ----
     localparam S_IDLE=0, S_NM0=1, S_NM1=2, S_NM2=3, S_NM3=4, S_NM4=67, S_NMR=5, S_NMRW=6,
@@ -112,7 +114,10 @@ module drs_iter #(
  S_SCLR0=171, S_SCLR1=172, S_SCLR2=173, S_SCLR3=174, S_SCLR4=175, S_SCLR5=176,
  S_SCLR6=177, S_SCLR7=178, S_SCLR8=179, S_SCLR9=180, S_SCLR10=181,
  S_SCLY2=182, S_SCLX2=183, S_SCLY3=184, S_SCLX3=185, S_SCLY4=186, S_SCLX4=187,
- S_SCLD1b=188, S_SCLP2b=189;
+ S_SCLD1b=188, S_SCLP2b=189,
+ S_SCLB0=190, S_SCLB1=191, S_SCLB2=192, S_SCLB3=193, S_SCLB4=194,
+ S_SCLB5=195, S_SCLB6=196, S_SCLB7=197, S_SCLB8=198, S_SCLB9=199,
+ S_SX0A=200, S_SX0B=201;
     reg [7:0] st;   // 0..136 fits in 8 bits
     // force refactor=1 during a scale-update g recompute (band comes from s_build)
     reg gks_active;
@@ -255,6 +260,9 @@ module drs_iter #(
  wire [63:0] log_relp, log_reld, exp_arg, exp_out, newscale_mul;
  fp64_log ulogp(rel_pri, log_relp);      // log(rel_pri)   (combinational)
  fp64_log ulogd(rel_dual, log_reld);     // log(rel_dual)
+ wire [63:0] n_log_dbl;
+ i2d ui2d(n_log_r[10:0], n_log_dbl);     // n_log -> double
+ assign exp_arg = div_o;                 // exp arg = sum_log/(2*n_log) from the trigger div
  fp64_exp  uexp(exp_arg, exp_out);       // exp(sum_log/(2n))
  fp64_mul unm(scale_cur, exp_out, newscale_mul);   // scale * exp(...)
  wire pdc_own = (st == S_CONE || st == S_CONEW);
@@ -308,8 +316,8 @@ module drs_iter #(
             sax_start <= 0; sax_din_valid <= 0; sax_x_in <= 0; sax_active <= 0;
             max_aty <= 0; max_px <= 0; max_ax <= 0; max_s <= 0; max_axs <= 0;
             denom_pri <= 0; denom_dual <= 0; rel_pri <= 0; rel_dual <= 0;
-            sum_log_r <= 0; scale_cur <= 0; tau_scl <= 0; new_scale <= 0;
-            n_log_r <= 0; last_scale_iter <= 0; aty_i <= 0; c_i <= 0; ax_i <= 0; s_i <= 0; nb_i <= 0;
+            sum_log_r <= 0; scale_cur <= 64'h3FF0000000000000; tau_scl <= 0; new_scale <= 0;  // scale_cur init 1.0
+            n_log_r <= 0; last_scale_iter <= -16'd100; aty_i <= 0; c_i <= 0; ax_i <= 0; s_i <= 0; nb_i <= 0;
         end else begin
             ks_start <= 0; ks_band_valid <= 0; ks_din_valid <= 0;
             ks_ry_valid <= 0; ks_dy_valid <= 0; ks_par_update <= 0;
@@ -628,21 +636,25 @@ module drs_iter #(
             // ============ scale update: recompute diag_r[n:n+m] + D_y, then
             // rebuild band (s_build), g = KKT^-1[c;-b], aa.reset, v remap ============
             S_SX0: begin
-                // rinv = 1/scale (one division)
-                scale_flow <= 1; scale_cur <= scale_r;
-                div_a <= 64'h3FF0000000000000; div_b <= scale_r; div_start <= 1;
-                i <= 0; own_addr <= ZMASK_BASE; st <= S_SX1;
+                // rinv = 1/scale (one division); scale_cur holds the scale to use
+                // (set in S_IDLE for an external scale_valid, or by the residual
+                // trigger path, so both flows drive the same downstream chain).
+                // ARM the div: a stale div_done (e.g. the residual sum_log/(2n) div
+                // that triggered this path) would otherwise be captured as rinv.
+                scale_flow <= 1;
+                div_a <= 64'h3FF0000000000000; div_b <= scale_cur; div_start <= 1;
+                i <= 0; own_addr <= ZMASK_BASE; st <= S_SX0A;
             end
-            S_SX1: begin
-                if (div_done) begin rinv <= div_o; st <= S_SX2; end
-            end
+            S_SX0A: begin if (!div_done) st <= S_SX0B; else st <= S_SX0A; end   // wait done drop
+            S_SX0B: begin if (div_done) begin rinv <= div_o; st <= S_SX1; end else st <= S_SX0B; end
+            S_SX1: begin zm <= ram_rdata; st <= S_SX2; end
             S_SX2: begin zm <= ram_rdata; st <= S_SX3; end      // zero-cone row mask[i]
             S_SX3: begin
                 // zmask=1.0 -> zero-cone row: r_y = rinv*1e-3, D_y = scale*1000
                 // zmask=0.0 -> other rows:      r_y = rinv*1,    D_y = scale*1
                 a1 <= rinv;
                 b1 <= (zm == 64'h0) ? 64'h3FF0000000000000 : 64'h3F50624DD2F1A9FC;
-                a2 <= scale_r;
+                a2 <= scale_cur;
                 b2 <= (zm == 64'h0) ? 64'h3FF0000000000000 : 64'h408F400000000000;
                 st <= S_SX4;
             end
@@ -748,10 +760,14 @@ module drs_iter #(
             end
 
             S_DONE: begin
-                done <= 1;
                 if (iter % 25 == 0 && iter > 0 && !scale_flow) begin
+                    // run the residual+scale chain THIS iteration before done,
+                    // otherwise it bleeds into the next iter and skips its DRS step.
+                    done <= 0;
                     i <= 0; own_addr <= U_BASE + N; st <= S_SCL0;
-                end else st <= S_IDLE;
+                end else begin
+                    done <= 1; st <= S_IDLE;
+                end
             end
             // ============ adaptive-scale residual (every 25 iters) ============
             // After a completed iteration (u/rsk updated): compute
@@ -846,8 +862,42 @@ module drs_iter #(
             end
             S_SCLR9: begin if (!div_done) st <= S_SCLR10; else st <= S_SCLR9; end
             S_SCLR10: begin
-                if (div_done) begin rel_dual <= div_o; st <= S_IDLE; end
+                if (div_done) begin rel_dual <= div_o; st <= S_SCLB0; end
                 else st <= S_SCLR10;
+            end
+            // ---- adaptive-scale decision: sum_log += log(rel_pri)-log(rel_dual) ----
+            S_SCLB0: begin sa <= log_relp; sb <= log_reld; ssub <= 1; st <= S_SCLB1; end
+            S_SCLB1: begin
+                sc <= sum_log_r; sd <= so1; ssub2 <= 0;
+                n_log_r <= n_log_r + 1; st <= S_SCLB2;      // sum_log + dlog -> so2
+            end
+            S_SCLB2: begin sum_log_r <= so2; a2 <= n_log_dbl; b2 <= LN10; st <= S_SCLB3; end
+            S_SCLB3: begin
+                cmp_a <= {1'b0, sum_log_r[62:0]}; cmp_b <= po2; st <= S_SCLB4;   // |sum_log| vs n_log*ln10
+            end
+            S_SCLB4: begin
+                // trigger = |sum_log|>n_log*ln10  AND  iters since last scale >= 100
+                if (cmp_gt && ($signed(iter) - last_scale_iter >= 16'd100)) begin
+                    a1 <= n_log_dbl; b1 <= 64'h4000000000000000; st <= S_SCLB5;  // 2*n_log -> po1
+                end else begin done <= 1; st <= S_IDLE; end
+            end
+            S_SCLB5: begin div_a <= sum_log_r; div_b <= po1; div_start <= 1; st <= S_SCLB6; end  // sum_log/(2n)
+            S_SCLB6: begin if (!div_done) st <= S_SCLB7; else st <= S_SCLB6; end   // ARM
+            S_SCLB7: begin
+                if (div_done) begin
+                    cmp_a <= newscale_mul; cmp_b <= SC_MIN; st <= S_SCLB8;          // clamp low
+                end else st <= S_SCLB7;
+            end
+            S_SCLB8: begin
+                new_scale <= (!cmp_gt) ? SC_MIN : newscale_mul;
+                cmp_a <= newscale_mul; cmp_b <= SC_MAX; st <= S_SCLB9;              // clamp high
+            end
+            S_SCLB9: begin
+                new_scale <= cmp_gt ? SC_MAX : new_scale;
+                last_scale_iter <= iter;
+                scale_cur <= new_scale;
+                sum_log_r <= 0; n_log_r <= 0;   // reset accumulator (scs_faithful reset)
+                st <= S_SX0;            // run the scale-update chain with new scale
             end
             default: st <= S_IDLE;
             endcase
