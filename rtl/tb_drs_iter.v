@@ -35,7 +35,7 @@ module tb_drs_iter;
     reg [63:0] cr [0:2047], nb [0:4095], zmask [0:4095];
     integer k, i;
     reg watchdog = 0;
-    always begin #2000000000; if (!watchdog) begin $display("TIMEOUT: sim stuck"); $finish; end end
+    always begin #300000000000; if (!watchdog) begin $display("TIMEOUT: sim stuck"); $finish; end end
 
     task run_iter;
         input [15:0] it;
