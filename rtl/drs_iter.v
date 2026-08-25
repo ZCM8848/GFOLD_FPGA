@@ -65,11 +65,10 @@ module drs_iter #(
     localparam CB_BASE = 8 * L + 2 * LM1 + L;      // c[0..n) + (-b)[n..n+m) for g recompute
     localparam BAND_BASE = CB_BASE + LM1;          // s_build band output (19800 words)
     localparam DY_BASE = BAND_BASE + (HB + 1) * N; // D_y for s_build (M words)
-    localparam ZMASK_BASE = DY_BASE + M;           // zero-cone row mask (M words, 0/1)
+    localparam ZMASK_BASE = DY_BASE;  // boot zmask data shares DY area (loaded to reg bits at reset)
     localparam LMAX = (N > M) ? N : M;             // = M for the G-FOLD problem
     // spmv workspace for the adaptive-scale residual: reused for A^Ty then Ax.
     // needs LMAX + LMAX words (spmv x@[0,LENX) + out@[LMAX,LMAX+LENO)).
-    localparam SCALE_BASE = ZMASK_BASE + M;
     localparam AA_SAFEGUARD = 64'h3FF0000000000000;  // 1.0 (scs_faithful AA_SAFEGUARD)
     localparam NM_B = 64'h40A2C00000000000;  // max|b| = 2400.0 (reordered frame)
     localparam NM_C = 64'h3FF0000000000000;  // max|c| = 1.0
@@ -106,6 +105,7 @@ module drs_iter #(
  S_VR7=136, S_VR8=137,
  S_GKSVX0=139, S_GKSVX1=140, S_GKSVY0=141, S_GKSVY1=142, S_GKSVY2=143,
  S_GKSRY0=144, S_GKSDY0=145,
+S_INIT0=146, S_INIT1=147, S_INIT2=148,
  S_SCL0=150, S_SCLY0=151, S_SCLY1=152, S_SCLT=153,
  S_SCLD0=154, S_SCLD1=155, S_SCLD2=156, S_SCLD3=157, S_SCLD4=158, S_SCLD5=159,
  S_SCLX0=160, S_SCLX1=161,
@@ -118,7 +118,7 @@ module drs_iter #(
  S_SCLB0=190, S_SCLB1=191, S_SCLB2=192, S_SCLB3=193, S_SCLB4=194,
  S_SCLB5=195, S_SCLB6=196, S_SCLB7=197, S_SCLB8=198, S_SCLB9=199,
  S_SX0A=200, S_SX0B=201;
-    reg [7:0] st;   // 0..136 fits in 8 bits
+    reg [7:0] st;   // 0..201 fits in 8 bits
     // force refactor=1 during a scale-update g recompute (band comes from s_build)
     reg gks_active;
     wire ks_refactor = refactor || gks_active;
@@ -155,7 +155,7 @@ module drs_iter #(
         .done(sb_done));
 
     // ---- spmv for adaptive-scale residual: A^T y (transpose=1) then A x
-    //      (transpose=0), both reusing SCALE_BASE workspace (sequential) ----
+    //      (transpose=0), both reusing BAND_BASE workspace (band idle outside scale rebuild) (sequential) ----
     reg  saty_start, saty_din_valid; reg [63:0] saty_x_in;
     wire [12:0] saty_addr; wire [63:0] saty_wdata; wire saty_we, saty_done;   // 13-bit: spmv ram_addr width
     spmv_fp64 #(.N(N), .M(M), .NNZ(NNZ), .transpose(1),
@@ -242,6 +242,7 @@ module drs_iter #(
     // ---- FSM ---- (state defs at module top; see S_IDLE etc above)
     reg [15:0] i;
     reg [63:0] vv, utv, gv, drv, tau_r, norm_r, sqacc, v_eta;
+    reg [M-1:0] zmask_bits;
     reg [63:0] gacc, norm_g_r, aa_xr, aa_fr;
     reg sflag;
  reg aa_done_r;
@@ -275,11 +276,11 @@ module drs_iter #(
             ram_wdata = pdc_wdata;
             ram_we = pdc_we;
         end else if (saty_active) begin
-            ram_addr = SCALE_BASE + saty_addr;
+            ram_addr = BAND_BASE + saty_addr;
             ram_wdata = saty_wdata;
             ram_we = saty_we;
         end else if (sax_active) begin
-            ram_addr = SCALE_BASE + sax_addr;
+            ram_addr = BAND_BASE + sax_addr;
             ram_wdata = sax_wdata;
             ram_we = sax_we;
         end else begin
@@ -292,7 +293,7 @@ module drs_iter #(
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            st <= S_IDLE; done <= 0;
+            st <= S_INIT0; done <= 0;
             own_addr <= 0; own_wdata <= 0; own_we <= 0;
             ks_start <= 0; ks_band_valid <= 0; ks_din_valid <= 0;
             ks_band_in <= 0; ks_x_in <= 0;
@@ -318,6 +319,7 @@ module drs_iter #(
             denom_pri <= 0; denom_dual <= 0; rel_pri <= 0; rel_dual <= 0;
             sum_log_r <= 0; scale_cur <= 64'h3FF0000000000000; tau_scl <= 0; new_scale <= 0;  // scale_cur init 1.0
             n_log_r <= 0; last_scale_iter <= -16'd100; aty_i <= 0; c_i <= 0; ax_i <= 0; s_i <= 0; nb_i <= 0;
+            zmask_bits <= 0;
         end else begin
             ks_start <= 0; ks_band_valid <= 0; ks_din_valid <= 0;
             ks_ry_valid <= 0; ks_dy_valid <= 0; ks_par_update <= 0;
@@ -329,6 +331,14 @@ module drs_iter #(
             own_we <= 0;
             scale_valid_p <= scale_valid;
             case (st)
+            // ---- boot: load zmask bits from DY area (tb preloaded zmask data) ----
+            S_INIT0: begin i <= 0; own_addr <= ZMASK_BASE; st <= S_INIT1; end
+            S_INIT1: begin zm <= ram_rdata; st <= S_INIT2; end
+            S_INIT2: begin
+                zmask_bits[i] <= (zm != 64'h0);
+                if (i + 1 >= M) st <= S_IDLE;
+                else begin i <= i + 1; own_addr <= ZMASK_BASE + i + 1; st <= S_INIT1; end
+            end
             S_IDLE: begin
                 done <= 0;
                 scale_flow <= 0;
@@ -643,12 +653,12 @@ module drs_iter #(
                 // that triggered this path) would otherwise be captured as rinv.
                 scale_flow <= 1;
                 div_a <= 64'h3FF0000000000000; div_b <= scale_cur; div_start <= 1;
-                i <= 0; own_addr <= ZMASK_BASE; st <= S_SX0A;
+                i <= 0; st <= S_SX0A;
             end
             S_SX0A: begin if (!div_done) st <= S_SX0B; else st <= S_SX0A; end   // wait done drop
             S_SX0B: begin if (div_done) begin rinv <= div_o; st <= S_SX1; end else st <= S_SX0B; end
-            S_SX1: begin zm <= ram_rdata; st <= S_SX2; end
-            S_SX2: begin zm <= ram_rdata; st <= S_SX3; end      // zero-cone row mask[i]
+            S_SX1: begin zm <= {63'b0, zmask_bits[i]}; st <= S_SX2; end
+            S_SX2: begin zm <= {63'b0, zmask_bits[i]}; st <= S_SX3; end      // zero-cone row mask[i]
             S_SX3: begin
                 // zmask=1.0 -> zero-cone row: r_y = rinv*1e-3, D_y = scale*1000
                 // zmask=0.0 -> other rows:      r_y = rinv*1,    D_y = scale*1
@@ -668,7 +678,7 @@ module drs_iter #(
             end
             S_SX6: begin
                 if (i + 1 >= M) begin sb_start <= 1; st <= S_SB; end
-                else begin i <= i + 1; own_addr <= ZMASK_BASE + i + 1; st <= S_SX2; end
+                else begin i <= i + 1; st <= S_SX2; end
             end
             // ---- s_build: rebuild S band into BAND_BASE ----
             S_SB: begin sb_start <= 1; st <= S_SBW; end
@@ -793,7 +803,7 @@ module drs_iter #(
                     i <= 0; own_addr <= U_BASE + LM1; st <= S_SCLT;
                 end
             end
-            S_SCLT: begin tau_scl <= ram_rdata; i <= 0; own_addr <= SCALE_BASE + LMAX; st <= S_SCLD0; end
+            S_SCLT: begin tau_scl <= ram_rdata; i <= 0; own_addr <= BAND_BASE + LMAX; st <= S_SCLD0; end
             S_SCLD0: begin aty_i <= ram_rdata; own_addr <= CB_BASE + i; st <= S_SCLD1; end
             S_SCLD1: begin c_i <= ram_rdata; a1 <= tau_scl; st <= S_SCLD1b; end
             S_SCLD1b: begin b1 <= c_i; st <= S_SCLD2; end
@@ -806,7 +816,7 @@ module drs_iter #(
             S_SCLD5: begin
                 max_px <= cmp_gt ? {1'b0, so1[62:0]} : max_px;
                 if (i + 1 >= N) begin i <= 0; sax_start <= 1; own_addr <= U_BASE; st <= S_SCLX0; end
-                else begin i <= i + 1; own_addr <= SCALE_BASE + LMAX + i + 1; st <= S_SCLD0; end
+                else begin i <= i + 1; own_addr <= BAND_BASE + LMAX + i + 1; st <= S_SCLD0; end
             end
             S_SCLX0: begin sax_pf <= ram_rdata; st <= S_SCLX1; end
             S_SCLX1: begin sax_x_in <= sax_pf; sax_din_valid <= 1; sax_active <= 1; st <= S_SCLX2; end
@@ -818,7 +828,7 @@ module drs_iter #(
             S_SCLX4: begin
                 if (sax_done) begin
                     sax_active <= 0; max_ax <= 0; max_s <= 0; max_axs <= 0;
-                    i <= 0; own_addr <= SCALE_BASE + LMAX; st <= S_SCLP0;
+                    i <= 0; own_addr <= BAND_BASE + LMAX; st <= S_SCLP0;
                 end
             end
             S_SCLP0: begin ax_i <= ram_rdata; own_addr <= RSK_BASE + N + i; st <= S_SCLP1; end
@@ -839,7 +849,7 @@ module drs_iter #(
             S_SCLP8: begin
                 max_axs <= cmp_gt ? {1'b0, so2[62:0]} : max_axs;
                 if (i + 1 >= M) st <= S_SCLR0;
-                else begin i <= i + 1; own_addr <= SCALE_BASE + LMAX + i + 1; st <= S_SCLP0; end
+                else begin i <= i + 1; own_addr <= BAND_BASE + LMAX + i + 1; st <= S_SCLP0; end
             end
             // rel_pri / rel_dual (fp64_div, ARM'd for the level-done)
             S_SCLR0: begin a1 <= NM_B; b1 <= tau_scl; st <= S_SCLR1; end

@@ -85,6 +85,8 @@ module tb_drs_iter;
         for (k = 0; k < M; k = k + 1) smem[dut.CB_BASE + N + k] = nb[k];
         for (k = 0; k < M; k = k + 1) smem[dut.ZMASK_BASE + k] = zmask[k];
         rst_n = 0; repeat (4) @(negedge clk); rst_n = 1;
+        // wait for zmask boot load (S_INIT0-2) to finish before the first start
+        while (dut.st !== 0) @(posedge clk);
         // generalized: run ITERS iterations, dump every 25 (scale-check iters) + last 3
         for (k = 0; k < ITERS; k = k + 1) begin
             run_iter(k, (k == 0) ? 1 : 0);
