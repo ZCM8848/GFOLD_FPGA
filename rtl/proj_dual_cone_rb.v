@@ -54,9 +54,9 @@ module proj_dual_cone_rb #(parameter M = 2107,
     reg [63:0] maxv;
     reg is_dim3;
 
-    localparam S0=0, S_NN=1, S_NRD=2, S_NW=3, S_NWR=4,
-               S_SRD=5, S_SR=6, S_PROJ=7, S_PW=8, S_PW2=9,
-               S_OUT=10, S_OW=11, S_TAIL=12, S_TNRD=13, S_TNW=14, S_TNWR=15,
+    localparam S0=0, S_NN=1, S_NRD=2, S_NRD2=18, S_NW=3, S_NWR=4,
+               S_SRD=5, S_SR=6, S_SRW=19, S_PROJ=7, S_PW=8, S_PW2=9,
+               S_OUT=10, S_OW=11, S_TAIL=12, S_TNRD=13, S_TNRD2=20, S_TNW=14, S_TNWR=15,
                S_TAILZ=16, S_DONE=17;
     reg [4:0] st;
 
@@ -78,6 +78,9 @@ module proj_dual_cone_rb #(parameter M = 2107,
                 else begin addr <= row; st <= S_NRD; end
             end
             S_NRD: begin
+                st <= S_NRD2;   // sync-read wait: ram_rdata settles for addr set in S_NN
+            end
+            S_NRD2: begin
                 maxv <= (rdata[63] ? 64'h0 : rdata);
                 st <= S_NW;
             end
@@ -90,7 +93,10 @@ module proj_dual_cone_rb #(parameter M = 2107,
             // ---- SOC segment of current node (NSOC blocks) ----
             S_SRD: begin
                 is_dim3 <= (b >= NS4);
-                j <= 0; addr <= row; st <= S_SR;
+                j <= 0; addr <= row; st <= S_SRW;
+            end
+            S_SRW: begin
+                st <= S_SR;   // sync-read wait: ram_rdata settles for addr set in S_SRD/S_SR
             end
             S_SR: begin
                 xblk_bus[j*64 +: 64] <= rdata;
@@ -98,7 +104,7 @@ module proj_dual_cone_rb #(parameter M = 2107,
                     if (b >= NS4) xblk_bus[255:192] <= 64'b0;   // pad dim3
                     st <= S_PROJ;
                 end else begin
-                    j <= j + 1; addr <= addr + 1; st <= S_SR;
+                    j <= j + 1; addr <= addr + 1; st <= S_SRW;
                 end
             end
             S_PROJ: begin
@@ -139,7 +145,8 @@ module proj_dual_cone_rb #(parameter M = 2107,
                 if (nn >= TAIL_NN) begin row <= row + TAIL_Z; st <= S_TAILZ; end
                 else begin addr <= row; st <= S_TNRD; end
             end
-            S_TNRD: begin maxv <= (rdata[63] ? 64'h0 : rdata); st <= S_TNW; end
+            S_TNRD: begin st <= S_TNRD2; end   // sync-read wait: ram_rdata settles for addr set in S_TAIL
+            S_TNRD2: begin maxv <= (rdata[63] ? 64'h0 : rdata); st <= S_TNW; end
             S_TNW: begin we <= 1; addr <= row; wdata <= maxv; st <= S_TNWR; end
             S_TNWR: begin we <= 0; row <= row + 1; nn <= nn + 1; st <= S_TAIL; end
             S_TAILZ: begin st <= S_DONE; end

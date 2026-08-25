@@ -139,13 +139,13 @@ module kkt_solve #(
 
     // ---- RAM port mux: spmv1 (BASE1=0) | spmv2 (BASE2=2*LMAX) | own ----
     localparam S_IDLE=0, S_BAND=1, S_VX=2, S_VXW=3, S_VY=4,
-               S_SP1WAIT=5, S_RHS0=6, S_RHS1=7, S_RHS2=8, S_RHS3=9,
+               S_SP1WAIT=5, S_RHS0=6, S_RHS1=7, S_RHS1R=27, S_RHS2=8, S_RHS2R=28, S_RHS3=9,
                S_ZCAP=10, S_ZCAPDONE=11,
                S_SP2START=12, S_SP2FEED=13, S_SP2WAIT=14,
-               S_ZY0=15, S_ZY1=16, S_ZY2=17, S_ZY3=18, S_ZY4=19,
-               S_ZOUT0=20, S_ZOUT1=21, S_ZYOUT0=22, S_ZYOUT1=23, S_DONE=24,
+               S_ZY0=15, S_ZY1=16, S_ZY1R=29, S_ZY2=17, S_ZY2R=30, S_ZY3=18, S_ZY4=19,
+               S_ZOUT0=20, S_ZOUT1=21, S_ZOUT1R=31, S_ZYOUT0=22, S_ZYOUT1=23, S_ZYOUT1R=32, S_DONE=24,
                S_DYRY=25, S_DYDY=26;
-    reg [4:0] st;
+    reg [5:0] st;
     reg [15:0] wp, i, r, zo;
     wire sp1_own = (st == S_VY || st == S_SP1WAIT);
     wire sp2_own = (st == S_SP2FEED || st == S_SP2WAIT);
@@ -258,8 +258,10 @@ module kkt_solve #(
             end
             // ---- stream rhs_x[i] = rho_x*vx[i] - A^Tvy[i] into LDL, 4 cyc/elem ----
             S_RHS0: begin own_addr <= AD_VX + i; st <= S_RHS1; end
-            S_RHS1: begin vx_i <= ram_rdata; own_addr <= AD_ATVY + i; st <= S_RHS2; end
-            S_RHS2: begin atvy_i <= ram_rdata; st <= S_RHS3; end
+            S_RHS1: begin st <= S_RHS1R; end   // sync-read wait: kmem rdata for AD_VX+i
+            S_RHS1R: begin vx_i <= ram_rdata; own_addr <= AD_ATVY + i; st <= S_RHS2; end
+            S_RHS2: begin st <= S_RHS2R; end   // sync-read wait: kmem rdata for AD_ATVY+i
+            S_RHS2R: begin atvy_i <= ram_rdata; st <= S_RHS3; end
             S_RHS3: begin
                 if (ldl_rhs_ready_w) begin
                     ldl_rhs_in <= so_rhs; ldl_rhs_valid <= 1;
@@ -296,8 +298,10 @@ module kkt_solve #(
                 ry_reg <= r_y_arr[r]; dy_reg <= Dy_arr[r];
                 own_addr <= AD_AZ + r; st <= S_ZY1;
             end
-            S_ZY1: begin az_r <= ram_rdata; own_addr <= r; st <= S_ZY2; end
-            S_ZY2: begin vy_r <= ram_rdata; st <= S_ZY3; end
+            S_ZY1: begin st <= S_ZY1R; end   // sync-read wait: kmem rdata for AD_AZ+r
+            S_ZY1R: begin az_r <= ram_rdata; own_addr <= r; st <= S_ZY2; end
+            S_ZY2: begin st <= S_ZY2R; end   // sync-read wait: kmem rdata for r
+            S_ZY2R: begin vy_r <= ram_rdata; st <= S_ZY3; end
             S_ZY3: begin
                 own_addr <= AD_AZ + r; own_wdata <= po_zy2; own_we <= 1;
                 st <= S_ZY4;
@@ -308,13 +312,15 @@ module kkt_solve #(
             end
             // ---- stream N zx words (RAM[AD_VX..]) then M zy words (RAM[AD_AZ..]) ----
             S_ZOUT0: begin own_addr <= AD_VX + i; st <= S_ZOUT1; end
-            S_ZOUT1: begin
+            S_ZOUT1: begin st <= S_ZOUT1R; end   // sync-read wait: kmem rdata for AD_VX+i
+            S_ZOUT1R: begin
                 z_out <= ram_rdata; o_valid <= 1;
                 if (i + 1 >= N) begin i <= 0; st <= S_ZYOUT0; end
                 else begin i <= i + 1; st <= S_ZOUT0; end
             end
             S_ZYOUT0: begin own_addr <= AD_AZ + i; st <= S_ZYOUT1; end
-            S_ZYOUT1: begin
+            S_ZYOUT1: begin st <= S_ZYOUT1R; end   // sync-read wait: kmem rdata for AD_AZ+i
+            S_ZYOUT1R: begin
                 z_out <= ram_rdata; o_valid <= 1;
                 if (i + 1 >= M) st <= S_DONE; else begin i <= i + 1; st <= S_ZYOUT0; end
             end
