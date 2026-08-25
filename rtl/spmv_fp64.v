@@ -37,9 +37,15 @@ module spmv_fp64 #(parameter N = 10, M = 20, NNZ = 41,
     reg [AW-1:0] Arow [0:NNZ-1];
     reg [AW-1:0] Acol [0:NNZ-1];
     initial begin
+`ifndef SYNTHESIS
         $readmemh(AROW_FILE, Arow);
+`endif
+`ifndef SYNTHESIS
         $readmemh(ACOL_FILE, Acol);
+`endif
+`ifndef SYNTHESIS
         $readmemh(AVAL_FILE, Aval);
+`endif
     end
 
     reg [63:0] pa, pb, sa, sb, cur, xv, acc_new; reg ssub; wire [63:0] po, so;

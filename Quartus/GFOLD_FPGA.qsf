@@ -53,3 +53,57 @@ set_global_assignment -name NOMINAL_CORE_SUPPLY_VOLTAGE 1.2V
 set_global_assignment -name EDA_SIMULATION_TOOL "ModelSim-Altera (Verilog)"
 set_global_assignment -name EDA_TIME_SCALE "1 ps" -section_id eda_simulation
 set_global_assignment -name EDA_OUTPUT_DATA_FORMAT "VERILOG HDL" -section_id eda_simulation
+# ===== sources =====
+set_global_assignment -name VERILOG_FILE ../rtl/GFOLD_FPGA.v
+set_global_assignment -name VERILOG_FILE ../rtl/drs_iter.v
+set_global_assignment -name VERILOG_FILE ../rtl/fp64.v
+set_global_assignment -name VERILOG_FILE ../rtl/fp64_log.v
+set_global_assignment -name VERILOG_FILE ../rtl/fp64_exp.v
+set_global_assignment -name VERILOG_FILE ../rtl/fp64_rsqrt.v
+set_global_assignment -name VERILOG_FILE ../rtl/fp64_cmp.v
+set_global_assignment -name VERILOG_FILE ../rtl/proj_soc.v
+set_global_assignment -name VERILOG_FILE ../rtl/root_plus.v
+set_global_assignment -name VERILOG_FILE ../rtl/aa_gram.v
+set_global_assignment -name VERILOG_FILE ../rtl/chol10.v
+set_global_assignment -name VERILOG_FILE ../rtl/anderson.v
+set_global_assignment -name VERILOG_FILE ../rtl/s_build.v
+set_global_assignment -name VERILOG_FILE ../rtl/spmv_fp64.v
+set_global_assignment -name VERILOG_FILE ../rtl/banded_ldl_fp64_rb.v
+set_global_assignment -name VERILOG_FILE ../rtl/kkt_solve.v
+set_global_assignment -name VERILOG_FILE ../rtl/proj_dual_cone_rb.v
+# ===== pins =====
+set_location_assignment PIN_Y2 -to CLOCK_50
+set_location_assignment PIN_E21 -to LEDG[0]
+set_location_assignment PIN_E22 -to LEDG[1]
+set_location_assignment PIN_E25 -to LEDG[2]
+set_location_assignment PIN_E24 -to LEDG[3]
+set_location_assignment PIN_H21 -to LEDG[4]
+set_location_assignment PIN_G20 -to LEDG[5]
+set_location_assignment PIN_G22 -to LEDG[6]
+set_location_assignment PIN_G21 -to LEDG[7]
+set_location_assignment PIN_F17 -to LEDG[8]
+set_location_assignment PIN_G19 -to LEDR[0]
+set_location_assignment PIN_E19 -to LEDR[2]
+set_location_assignment PIN_F19 -to LEDR[1]
+set_location_assignment PIN_F21 -to LEDR[3]
+set_location_assignment PIN_F18 -to LEDR[4]
+set_location_assignment PIN_E18 -to LEDR[5]
+set_location_assignment PIN_J19 -to LEDR[6]
+set_location_assignment PIN_H19 -to LEDR[7]
+set_location_assignment PIN_J17 -to LEDR[8]
+set_location_assignment PIN_G17 -to LEDR[9]
+set_location_assignment PIN_J15 -to LEDR[10]
+set_location_assignment PIN_H16 -to LEDR[11]
+set_location_assignment PIN_J16 -to LEDR[12]
+set_location_assignment PIN_H17 -to LEDR[13]
+set_location_assignment PIN_F15 -to LEDR[14]
+set_location_assignment PIN_G15 -to LEDR[15]
+set_location_assignment PIN_G16 -to LEDR[16]
+set_location_assignment PIN_H15 -to LEDR[17]
+set_location_assignment PIN_M23 -to KEY[0]
+set_location_assignment PIN_M21 -to KEY[1]
+set_location_assignment PIN_N21 -to KEY[2]
+set_location_assignment PIN_R24 -to KEY[3]
+
+
+set_global_assignment -name VERILOG_MACRO "SYNTHESIS=1"

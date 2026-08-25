@@ -54,9 +54,60 @@ module fp64_add(input  wire [63:0] a, b,
     reg [5:0] lzc;
     integer i;
     always @(*) begin
-        lzc = 6'd53;
-        for (i = 52; i >= 0; i = i - 1)
-            if (msum[i]) begin lzc = (52 - i); i = -1; end
+        if (msum[52])      lzc = 6'd0;
+        else if (msum[51])      lzc = 6'd1;
+        else if (msum[50])      lzc = 6'd2;
+        else if (msum[49])      lzc = 6'd3;
+        else if (msum[48])      lzc = 6'd4;
+        else if (msum[47])      lzc = 6'd5;
+        else if (msum[46])      lzc = 6'd6;
+        else if (msum[45])      lzc = 6'd7;
+        else if (msum[44])      lzc = 6'd8;
+        else if (msum[43])      lzc = 6'd9;
+        else if (msum[42])      lzc = 6'd10;
+        else if (msum[41])      lzc = 6'd11;
+        else if (msum[40])      lzc = 6'd12;
+        else if (msum[39])      lzc = 6'd13;
+        else if (msum[38])      lzc = 6'd14;
+        else if (msum[37])      lzc = 6'd15;
+        else if (msum[36])      lzc = 6'd16;
+        else if (msum[35])      lzc = 6'd17;
+        else if (msum[34])      lzc = 6'd18;
+        else if (msum[33])      lzc = 6'd19;
+        else if (msum[32])      lzc = 6'd20;
+        else if (msum[31])      lzc = 6'd21;
+        else if (msum[30])      lzc = 6'd22;
+        else if (msum[29])      lzc = 6'd23;
+        else if (msum[28])      lzc = 6'd24;
+        else if (msum[27])      lzc = 6'd25;
+        else if (msum[26])      lzc = 6'd26;
+        else if (msum[25])      lzc = 6'd27;
+        else if (msum[24])      lzc = 6'd28;
+        else if (msum[23])      lzc = 6'd29;
+        else if (msum[22])      lzc = 6'd30;
+        else if (msum[21])      lzc = 6'd31;
+        else if (msum[20])      lzc = 6'd32;
+        else if (msum[19])      lzc = 6'd33;
+        else if (msum[18])      lzc = 6'd34;
+        else if (msum[17])      lzc = 6'd35;
+        else if (msum[16])      lzc = 6'd36;
+        else if (msum[15])      lzc = 6'd37;
+        else if (msum[14])      lzc = 6'd38;
+        else if (msum[13])      lzc = 6'd39;
+        else if (msum[12])      lzc = 6'd40;
+        else if (msum[11])      lzc = 6'd41;
+        else if (msum[10])      lzc = 6'd42;
+        else if (msum[9])      lzc = 6'd43;
+        else if (msum[8])      lzc = 6'd44;
+        else if (msum[7])      lzc = 6'd45;
+        else if (msum[6])      lzc = 6'd46;
+        else if (msum[5])      lzc = 6'd47;
+        else if (msum[4])      lzc = 6'd48;
+        else if (msum[3])      lzc = 6'd49;
+        else if (msum[2])      lzc = 6'd50;
+        else if (msum[1])      lzc = 6'd51;
+        else if (msum[0])      lzc = 6'd52;
+        else               lzc = 6'd53;
     end
     always @(*) begin
         if (za) o = bo;

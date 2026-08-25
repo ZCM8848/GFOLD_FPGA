@@ -44,9 +44,15 @@ module s_build #(
     reg [15:0]   Arow [0:NNZ-1];
     reg [15:0]   Acol [0:NNZ-1];
     initial begin
+`ifndef SYNTHESIS
         $readmemh(AROW_FILE, Arow);
+`endif
+`ifndef SYNTHESIS
         $readmemh(ACOL_FILE, Acol);
+`endif
+`ifndef SYNTHESIS
         $readmemh(AVAL_FILE, Aval);
+`endif
     end
 
     // ---- per-row entry buffer (full problem: max 5 entries/row) ----

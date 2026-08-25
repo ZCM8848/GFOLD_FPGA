@@ -66,8 +66,12 @@ module kkt_solve #(
     reg [63:0] r_y_arr [0:M-1];
     reg [63:0] Dy_arr  [0:M-1];
     initial begin
+`ifndef SYNTHESIS
         $readmemh(RY_FILE, r_y_arr);
+`endif
+`ifndef SYNTHESIS
         $readmemh(DY_FILE, Dy_arr);
+`endif
     end
     reg [63:0] zx_arr [0:N-1];          // zx captured from LDL, fed to spmv2
 
