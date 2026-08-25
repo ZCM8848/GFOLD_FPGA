@@ -11,12 +11,30 @@ module tb_anderson;
     reg start = 0, din_valid = 0;
     reg [63:0] x_in, f_in;
     wire rdy; wire [63:0] f_out; wire o_valid, done;
+    // ---- external SRAM (behavioral model + sram64_ctrl) ----
+    reg [15:0] sram_mem [0:1048575];
+    wire sram_req, sram_we; wire [17:0] sram_waddr; wire [63:0] sram_wdata;
+    wire sram_busy; wire [63:0] sram_rdata;
+    wire [19:0] sram_addr; wire [15:0] sram_dq;
+    wire sram_ce_n, sram_oe_n, sram_we_n, sram_ub_n, sram_lb_n;
     anderson #(.DIM(DIM), .MEM(MEM)) dut(.clk(clk),.rst_n(rst_n),.start(start),
         .x_in(x_in),.f_in(f_in),.din_valid(din_valid),.rdy(rdy),
-        .f_out(f_out),.o_valid(o_valid),.done(done));
+        .f_out(f_out),.o_valid(o_valid),.done(done),
+        .sram_req(sram_req),.sram_we(sram_we),.sram_waddr(sram_waddr),
+        .sram_wdata(sram_wdata),.sram_busy(sram_busy),.sram_rdata(sram_rdata));
+    sram64_ctrl #(.AW(18)) uctrl(.clk(clk),.rst_n(rst_n),.req(sram_req),.we(sram_we),
+        .waddr(sram_waddr),.wdata(sram_wdata),.busy(sram_busy),.rdata(sram_rdata),
+        .SRAM_ADDR(sram_addr),.SRAM_DQ(sram_dq),.SRAM_CE_N(sram_ce_n),
+        .SRAM_OE_N(sram_oe_n),.SRAM_WE_N(sram_we_n),.SRAM_UB_N(sram_ub_n),
+        .SRAM_LB_N(sram_lb_n));
+    // behavioral async SRAM: async read (OE low -> data out), sync write (WE low)
+    assign sram_dq = (!sram_oe_n && sram_addr < 1048576) ? sram_mem[sram_addr] : 16'hz;
+    always @(posedge clk) begin
+        if (!sram_we_n && sram_addr < 1048576) sram_mem[sram_addr] <= sram_dq;
+    end
 
-    reg [63:0] callmem [0:127];        // DIM*3 <= 96
-    reg [63:0] got [0:31];             // DIM <= 32
+    reg [63:0] callmem [0:32767];        // DIM*3 (3208*3=9624)
+    reg [63:0] got [0:4095];             // DIM (3208)
     integer c, i, k, fd;
     reg [63:0] ex;
 
