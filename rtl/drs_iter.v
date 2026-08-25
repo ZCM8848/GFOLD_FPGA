@@ -123,8 +123,14 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
  S_SCLD1b=188, S_SCLP2b=189,
  S_SCLB0=190, S_SCLB1=191, S_SCLB2=192, S_SCLB3=193, S_SCLB4=194,
  S_SCLB5=195, S_SCLB6=196, S_SCLB7=197, S_SCLB8=198, S_SCLB9=199,
- S_SX0A=200, S_SX0B=201;
-    reg [7:0] st;   // 0..201 fits in 8 bits
+ S_SX0A=200, S_SX0B=201,
+    S_W1=210, S_W2=211, S_W3=212, S_W4=213, S_W5=214, S_W6=215, S_W7=216, S_W8=217,
+    S_W9=218, S_W10=219, S_W11=220, S_W12=221, S_W13=222, S_W14=223, S_W15=224, S_W16=225,
+    S_W17=226, S_W18=227, S_W19=228, S_W20=229, S_W21=230, S_W22=231, S_W23=232, S_W24=233,
+    S_W25=234, S_W26=235, S_W27=236, S_W28=237, S_W29=238, S_W30=239, S_W31=240, S_W32=241,
+    S_W33=242, S_W34=243, S_W35=244, S_W36=245, S_W37=246, S_W38=247, S_W39=248, S_W40=249,
+    S_W41=250, S_W42=251, S_W43=252, S_W44=253, S_W45=254, S_W46=255;
+    reg [8:0] st;   // 0..261 fits in 9 bits (sync-read waits S_W1..W46)
     // force refactor=1 during a scale-update g recompute (band comes from s_build)
     reg gks_active;
     wire ks_refactor = refactor || gks_active;
@@ -407,7 +413,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             S_IDLE: begin
                 done <= 0;
                 scale_flow <= 0;
-                if (scale_valid && !scale_valid_p) begin scale_cur <= scale_r; i <= 0; own_addr <= ZMASK_BASE; st <= S_SX0; end
+                if (scale_valid && !scale_valid_p) begin scale_cur <= scale_r; i <= 0; own_addr <= ZMASK_BASE; st <= S_W1; end
                 else if (start) begin
                     if (iter == 0) begin i <= 0; own_addr <= V_BASE; st <= S_VPC0; end  // FEAS: v_prev=v0, no normalize
                     else if (aa_round) begin i <= 0; own_addr <= VPR_BASE; st <= S_AA0; end  // AA apply first
@@ -498,15 +504,17 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                 end
             end
             // ============ v_prev <- v (after AA apply / normalize) ============
-            S_VPC0: begin i <= 0; own_addr <= V_BASE; st <= S_VPC1; end
+            S_VPC0: begin i <= 0; own_addr <= V_BASE; st <= S_W7; end
+            S_W7: begin st <= S_VPC1; end
             S_VPC1: begin vv <= ram_rdata; own_addr <= VPR_BASE + i; st <= S_VPC2; end
             S_VPC2: begin
                 own_addr <= VPR_BASE + i; own_wdata <= vv; own_we <= 1; st <= S_VPC3;
             end
             S_VPC3: begin
                 if (i + 1 >= L) st <= S_KSSTART;
-                else begin i <= i + 1; own_addr <= V_BASE + i; st <= S_VPC1; end
+                else begin i <= i + 1; own_addr <= V_BASE + i; st <= S_W8; end
             end
+            S_W8: begin st <= S_VPC1; end
             // ============ KKT solve ============
             S_KSSTART: begin
                 ks_start <= 1; i <= 0;
@@ -519,7 +527,8 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                     else i <= i + 1;
                 end
             end
-            S_KSVX: begin own_addr <= V_BASE + i; st <= S_KSVXW; end
+            S_KSVX: begin own_addr <= V_BASE + i; st <= S_W9; end
+            S_W9: begin st <= S_KSVXW; end
             S_KSVXW: begin
                 ks_x_in <= ram_rdata; ks_din_valid <= 1;
                 if (i + 1 >= N) begin i <= 0; st <= S_KSVY; end
@@ -771,12 +780,12 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             end
             S_GKSDY0: begin
                 ks_dy_in <= ram_rdata; ks_dy_valid <= 1;
-                if (i + 1 >= M) begin i <= 0; own_addr <= BAND_BASE; st <= S_GKSB; end
+                if (i + 1 >= M) begin i <= 0; own_addr <= BAND_BASE; st <= S_W2; end
                 else begin i <= i + 1; own_addr <= DY_BASE + i + 1; st <= S_GKSDY0; end
             end
             S_GKSB: begin
                 ks_band_in <= ram_rdata; ks_band_valid <= 1;
-                if (i + 1 >= (HB + 1) * N) begin i <= 0; own_addr <= CB_BASE; st <= S_GKSVX0; end
+                if (i + 1 >= (HB + 1) * N) begin i <= 0; own_addr <= CB_BASE; st <= S_W3; end
                 else begin i <= i + 1; own_addr <= BAND_BASE + i + 1; st <= S_GKSB; end
             end
             // v_x[i] = c[i]/rho_x = c[i]*1e6  (1/rho_x = 1e6)
@@ -842,7 +851,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                     // run the residual+scale chain THIS iteration before done,
                     // otherwise it bleeds into the next iter and skips its DRS step.
                     done <= 0;
-                    i <= 0; own_addr <= U_BASE + N; st <= S_SCL0;
+                    i <= 0; own_addr <= U_BASE + N; st <= S_W4;
                 end else begin
                     done <= 1; st <= S_IDLE;
                 end
@@ -868,7 +877,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             S_SCLY4: begin
                 if (saty_done) begin
                     saty_active <= 0; max_aty <= 0; max_px <= 0;
-                    i <= 0; own_addr <= U_BASE + LM1; st <= S_SCLT;
+                    i <= 0; own_addr <= U_BASE + LM1; st <= S_W5;
                 end
             end
             S_SCLT: begin tau_scl <= ram_rdata; i <= 0; own_addr <= BAND_BASE + LMAX; st <= S_SCLD0; end
@@ -896,7 +905,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             S_SCLX4: begin
                 if (sax_done) begin
                     sax_active <= 0; max_ax <= 0; max_s <= 0; max_axs <= 0;
-                    i <= 0; own_addr <= BAND_BASE + LMAX; st <= S_SCLP0;
+                    i <= 0; own_addr <= BAND_BASE + LMAX; st <= S_W6;
                 end
             end
             S_SCLP0: begin ax_i <= ram_rdata; own_addr <= RSK_BASE + N + i; st <= S_SCLP1; end
@@ -978,6 +987,14 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                 st <= S_SX0;            // run the scale-update chain with new scale
             end
             default: st <= S_IDLE;
+
+            // ---- sync-RAM read wait states ----
+            S_W1: begin st <= S_SX0; end
+            S_W2: begin st <= S_GKSB; end
+            S_W3: begin st <= S_GKSVX0; end
+            S_W4: begin st <= S_SCL0; end
+            S_W5: begin st <= S_SCLT; end
+            S_W6: begin st <= S_SCLP0; end
             endcase
         end
     end
