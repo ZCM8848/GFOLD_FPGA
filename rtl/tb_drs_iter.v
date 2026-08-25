@@ -80,6 +80,17 @@ module tb_drs_iter;
         if (dut.u_saty.st != 0 || dut.u_sax.st != 0) begin end
     end
 
+    // ---- sync-read porting debug: print read-state transitions in iter1 (st window) ----
+    reg [8:0] prev_st_d = 999;
+    always @(posedge clk) begin
+        if (dut.st !== prev_st_d && dut.st >= 0 && dut.st <= 300) begin
+            if ($time >= 95000000000 && $time <= 104000000000) begin  // iter1: 91ms..104ms
+                $display("DST t=%0d st=%0d", $time, dut.st);
+            end
+            prev_st_d <= dut.st;
+        end
+    end
+
 
     initial begin
         $readmemh("../data/kkt/full/v0.hex", v0);
