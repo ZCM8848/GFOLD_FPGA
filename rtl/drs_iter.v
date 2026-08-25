@@ -65,17 +65,14 @@ module drs_iter #(
     localparam RSK_BASE= 3 * L;
     localparam G_BASE  = 4 * L;
     localparam DR_BASE = 4 * L + LM1;
-    localparam VPR_BASE= 5 * L + LM1;      // v_prev (AA apply input x)
-    localparam SAFEV_BASE = 6 * L + LM1;   // v before AA (apply input f backup)
-    localparam SAFEVP_BASE = 7 * L + LM1;  // v_prev before AA (apply input x backup)
-    localparam CB_BASE = 8 * L + 2 * LM1 + L;      // c[0..n) + (-b)[n..n+m) for g recompute
+    localparam VPR_BASE= 5 * L + LM1;      // v_prev
+    localparam CB_BASE = 6 * L + 2 * LM1 + L;      // c[0..n) + (-b)[n..n+m) for g recompute
     localparam BAND_BASE = CB_BASE + LM1;          // s_build band output (19800 words)
     localparam DY_BASE = BAND_BASE + (HB + 1) * N; // D_y for s_build (M words)
     localparam ZMASK_BASE = DY_BASE;  // boot zmask data shares DY area (loaded to reg bits at reset)
     localparam LMAX = (N > M) ? N : M;             // = M for the G-FOLD problem
     // spmv workspace for the adaptive-scale residual: reused for A^Ty then Ax.
     // needs LMAX + LMAX words (spmv x@[0,LENX) + out@[LMAX,LMAX+LENO)).
-    localparam AA_SAFEGUARD = 64'h3FF0000000000000;  // 1.0 (scs_faithful AA_SAFEGUARD)
     localparam NM_B = 64'h40A2C00000000000;  // max|b| = 2400.0 (reordered frame)
     localparam NM_C = 64'h3FF0000000000000;  // max|c| = 1.0
     localparam LN10 = 64'h40026BB1BBB55516;  // ln(10) = 2.302585093
@@ -95,8 +92,6 @@ module drs_iter #(
  S_RSK5=53, S_RSK6=54, S_RSK7=55, S_RSK8=56, S_RSK9=57,
  S_V0=58, S_V1=59, S_V2=60, S_V3=61, S_V4=62, S_V5=63,
  S_V6=64, S_V7=65, S_DONE=66,
- S_AA0=69, S_AA1=70, S_AA2=71, S_AA3=72, S_AA4=73, S_AA5=74,
- S_AA6=75, S_AA7=76, S_AA8=77, S_AA9=78, S_AA10=79, S_AAW=80,
  S_VPC0=81, S_VPC1=82, S_VPC2=83, S_VPC3=84,
  S_SG0=85, S_SG1=86, S_SG2=87, S_SG3=88, S_SG4=89, S_SG5=90,
  S_SG6=91, S_SG7=92, S_SG8=93, S_SG9=94,
@@ -106,7 +101,6 @@ module drs_iter #(
  S_SB=116, S_SBW=117,
  S_GKS0=118, S_GKSB=119, S_GKSVX=120, S_GKSVXW=121, S_GKSVY=122, S_GKSVYW=123,
  S_GKSZ=124, S_GKSD=125,
- S_AAR=126, S_AARW=127,
  S_VR0=128, S_VR1=129, S_VR2=130, S_VR2B=131, S_VR3=132, S_VR4=133, S_VR5=134, S_VR6=135,
  S_VR7=136, S_VR8=137,
  S_GKSVX0=139, S_GKSVX1=140, S_GKSVY0=141, S_GKSVY1=142, S_GKSVY2=143,
@@ -214,63 +208,21 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
         .addr(pdc_addr), .wdata(pdc_wdata), .we(pdc_we), .rdata(pdc_rdata),
         .done(pdc_done));
 
-    // ---- Anderson accelerator (apply call: x=v_prev, f=v; f_out = accel f) ----
-    reg  aa_start, aa_dv;
-    reg  [63:0] aa_x, aa_f;
-    wire aa_rdy;
-    wire [63:0] aa_fout;
-    wire aa_o_valid, aa_done;
-    reg  aa_reset_s;
-    wire aa_sram_req, aa_sram_we; wire [17:0] aa_sram_waddr; wire [63:0] aa_sram_wdata;
-    wire aa_sram_busy; wire [63:0] aa_sram_rdata;
-    anderson #(.DIM(L), .MEM(10)) u_aa(.clk(clk), .rst_n(rst_n), .aa_reset(aa_reset_s), .start(aa_start),
-        .x_in(aa_x), .f_in(aa_f), .din_valid(aa_dv), .rdy(aa_rdy),
-        .f_out(aa_fout), .o_valid(aa_o_valid), .done(aa_done),
-        .sram_req(aa_sram_req), .sram_we(aa_sram_we), .sram_waddr(aa_sram_waddr),
-        .sram_wdata(aa_sram_wdata), .sram_busy(aa_sram_busy), .sram_rdata(aa_sram_rdata));
-
-    // ---- external SRAM arbiter (Anderson + LDL -> sram64_ctrl) ----
+    // ---- external SRAM (LDL single user -> sram64_ctrl) ----
     wire sram_req, sram_we; wire [17:0] sram_waddr; wire [63:0] sram_wdata;
     wire sram_busy; wire [63:0] sram_rdata;
-    reg a_grant, l_grant;
-    reg a_fall_p, l_fall_p;
-    reg sram_busy_p;
-    always @(posedge clk) sram_busy_p <= sram_busy;
-    // release ONLY on the busy falling edge (a grant issued while the ctrl was
-    // idle would otherwise be dropped before it starts; client busy routing
-    // then reads 0 and the client stalls forever waiting for busy)
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin a_grant <= 0; l_grant <= 0; a_fall_p <= 0; l_fall_p <= 0; end
-        else begin
-            // fall markers: 1 cycle AFTER the busy falling edge, so the client's
-            // read data (sampled when sram_done pulses) still sees the grant held
-            // and gets the real rdata instead of the routed 0
-            a_fall_p <= (a_grant && sram_busy_p && !sram_busy);
-            l_fall_p <= (l_grant && sram_busy_p && !sram_busy);
-            if (a_fall_p) a_grant <= 0;
-            if (l_fall_p) l_grant <= 0;
-            if (!a_grant && !l_grant) begin
-                if (aa_sram_req) a_grant <= 1;
-                else if (ks_sram_req) l_grant <= 1;
-            end
-        end
-    end
-    assign sram_req   = a_grant || l_grant;   // held during grant; ctrl uses rising edge
-    assign sram_we    = a_grant ? aa_sram_we : ks_sram_we;
-    assign sram_waddr = a_grant ? aa_sram_waddr : ks_sram_waddr;
-    assign sram_wdata = a_grant ? aa_sram_wdata : ks_sram_wdata;
-    assign aa_sram_busy  = a_grant ? sram_busy : 1'b0;
-    assign aa_sram_rdata = a_grant ? sram_rdata : 64'h0;
-    assign ks_sram_busy  = l_grant ? sram_busy : 1'b0;
-    assign ks_sram_rdata = l_grant ? sram_rdata : 64'h0;
+    assign sram_req   = ks_sram_req;
+    assign sram_we    = ks_sram_we;
+    assign sram_waddr = ks_sram_waddr;
+    assign sram_wdata = ks_sram_wdata;
+    assign ks_sram_busy  = sram_busy;
+    assign ks_sram_rdata = sram_rdata;
     assign band_ready = (st == S_KSBAND) && ks_band_ready;
     sram64_ctrl #(.AW(18)) u_sram(.clk(clk), .rst_n(rst_n), .req(sram_req), .we(sram_we),
         .waddr(sram_waddr), .wdata(sram_wdata), .busy(sram_busy), .rdata(sram_rdata),
         .SRAM_ADDR(SRAM_ADDR), .SRAM_DQ(SRAM_DQ), .SRAM_CE_N(SRAM_CE_N),
         .SRAM_OE_N(SRAM_OE_N), .SRAM_WE_N(SRAM_WE_N), .SRAM_UB_N(SRAM_UB_N),
         .SRAM_LB_N(SRAM_LB_N));
-    // AA round: iter>0 and iter%10==0
-    wire aa_round = (iter != 0) && (iter % 10 == 0);
     // FP64 comparison (a > b), combinational, no NaN/denormal handling needed here
     reg  [63:0] cmp_a, cmp_b;
     wire cmp_gt = (cmp_a[63] != cmp_b[63]) ? (~cmp_a[63]) :
@@ -313,11 +265,8 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     reg [15:0] i;
     reg [63:0] vv, utv, gv, drv, tau_r, norm_r, sqacc, v_eta;
     reg [M-1:0] zmask_bits;
-    reg [63:0] gacc, norm_g_r, aa_xr, aa_fr;
     reg sflag;
- reg aa_done_r;
- reg rs_done_p, rs_rise;
- reg [15:0] aa_cnt;
+ reg rs_done_p;
  reg [63:0] rinv, zm, vr, vd, vu, vv2;
  reg scale_valid_p;   // prev scale_valid, for rising-edge detection (level-safe trigger)
  reg scale_flow;      // 1 while the scale-update chain runs (suppress residual check at its S_DONE)
@@ -377,12 +326,11 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             rs_start <= 0; rs_in <= 0;
             i <= 0; vv <= 0; utv <= 0; gv <= 0; drv <= 0;
             tau_r <= 0; norm_r <= 0; sqacc <= 0; v_eta <= 0;
-            aa_start <= 0; aa_dv <= 0; aa_x <= 0; aa_f <= 0;
-            gacc <= 0; norm_g_r <= 0; aa_xr <= 0; aa_fr <= 0; sflag <= 0;
-            cmp_a <= 0; cmp_b <= 0; aa_done_r <= 0;
-            rs_done_p <= 0; rs_rise <= 0; aa_cnt <= 0;
+            sflag <= 0;
+            cmp_a <= 0; cmp_b <= 0;
+            rs_done_p <= 0;
             rinv <= 0; zm <= 0; vr <= 0; vd <= 0; vu <= 0; vv2 <= 0;
-            sb_start <= 0; aa_reset_s <= 0; gks_active <= 0; scale_valid_p <= 0; scale_flow <= 0;
+            sb_start <= 0; gks_active <= 0; scale_valid_p <= 0; scale_flow <= 0;
             saty_start <= 0; saty_din_valid <= 0; saty_x_in <= 0; saty_active <= 0;
             sax_start <= 0; sax_din_valid <= 0; sax_x_in <= 0; sax_active <= 0;
             max_aty <= 0; max_px <= 0; max_ax <= 0; max_s <= 0; max_axs <= 0;
@@ -397,7 +345,6 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             div_start <= 0; sb_start <= 0;
             saty_start <= 0; saty_din_valid <= 0;
             sax_start <= 0; sax_din_valid <= 0;
-            aa_start <= 0; aa_dv <= 0;
             if (ks_band_valid && !ks_band_ready) ks_band_valid <= 0;   // level-held: clear after LDL sampled
             own_we <= 0;
             scale_valid_p <= scale_valid;
@@ -416,7 +363,6 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                 if (scale_valid && !scale_valid_p) begin scale_cur <= scale_r; i <= 0; own_addr <= ZMASK_BASE; st <= S_W1; end
                 else if (start) begin
                     if (iter == 0) begin i <= 0; own_addr <= V_BASE; st <= S_W13; end  // FEAS: v_prev=v0, no normalize
-                    else if (aa_round) begin i <= 0; own_addr <= VPR_BASE; st <= S_W14; end  // AA apply first
                     else begin i <= 0; own_addr <= V_BASE; st <= S_W15; end
                 end
             end
@@ -460,50 +406,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                 if (i + 1 >= L) begin i <= 0; own_addr <= V_BASE; st <= S_W21; end
                 else begin i <= i + 1; own_addr <= V_BASE + i + 1; st <= S_W22; end
             end
-            // ============ Anderson apply (aa_round): stream (x=v_prev, f=v),
-            // back up both to SAFEV/SAFEVP, accumulate ||x-f||^2 for norm_g ====
-            S_AA0: begin aa_start <= 1; gacc <= 0; aa_done_r <= 0; aa_cnt <= aa_cnt + 1; i <= 0; own_addr <= VPR_BASE; st <= S_W23; end
-            S_AA1: begin aa_xr <= ram_rdata; own_addr <= V_BASE + i; st <= S_W24; end
-            S_AA2: begin aa_fr <= ram_rdata; sa <= aa_xr; sb <= aa_fr; ssub <= 1; st <= S_AA3; end
-            S_AA3: begin
-                a1 <= so1; b1 <= so1; aa_x <= aa_xr; aa_f <= aa_fr; aa_dv <= 1; st <= S_AA4;
-            end
-            S_AA4: begin sc <= gacc; sd <= po1; ssub2 <= 0; st <= S_AA5; end
-            S_AA5: begin gacc <= so2; st <= S_AA6; end
-            S_AA6: begin
-                own_addr <= SAFEV_BASE + i; own_wdata <= aa_fr; own_we <= 1; st <= S_AA7;
-            end
-            S_AA7: begin
-                own_addr <= SAFEVP_BASE + i; own_wdata <= aa_xr; own_we <= 1;
-                if (aa_rdy || i + 1 >= L) begin
-                    aa_dv <= 0;   // clear after Anderson sampled (level-held valid)
-                    if (i + 1 >= L) begin i <= 0; st <= S_AA8; end
-                    else begin i <= i + 1; own_addr <= VPR_BASE + i + 1; st <= S_W25; end
-                end
-            end
-            S_AA8: begin
-                aa_dv <= 0;
-                if (aa_o_valid) begin
-                    own_addr <= V_BASE + i; own_wdata <= aa_fout; own_we <= 1;
-                    if (i + 1 >= L) st <= S_AA9; else i <= i + 1;
-                end
-            end
-            S_AA9: begin
-                // aa_done pulses here (1 cycle after the last f_out) — latch it
-                // NOW; S_AA10 samples it one cycle too late (S_IDLE clears it).
-                rs_start <= 1; rs_in <= gacc; rs_rise <= 0;
-                if (aa_done) aa_done_r <= 1;
-                st <= S_AA10;
-            end
-            S_AA10: begin
-                if (aa_done) aa_done_r <= 1;
-                rs_done_p <= rs_done;
-                if (rs_done && !rs_done_p) begin norm_g_r <= rs_o; rs_rise <= 1; end
-                if (aa_done_r && rs_rise) begin
-                    aa_done_r <= 0; rs_rise <= 0; i <= 0; own_addr <= V_BASE; st <= S_W26;
-                end
-            end
-            // ============ v_prev <- v (after AA apply / normalize) ============
+            // ============ v_prev <- v (after normalize) ============
             S_VPC0: begin i <= 0; own_addr <= V_BASE; st <= S_W7; end
             S_W7: begin st <= S_VPC1; end
             S_VPC1: begin vv <= ram_rdata; own_addr <= VPR_BASE + i; st <= S_W27; end
@@ -661,68 +564,11 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                 st <= S_V7;
             end
             S_V7: begin
-                if (i + 1 >= L) begin
-                    if (aa_round) begin i <= 0; own_addr <= V_BASE; st <= S_W49; end
-                    else st <= S_DONE;
-                end
+                if (i + 1 >= L) st <= S_DONE;
                 else begin i <= i + 1; own_addr <= U_BASE + i + 1; st <= S_W50; end
             end
-            // ============ AA safeguard: ||v - v_prev|| vs AA_SAFEGUARD*norm_g ===
-            S_SG0: begin i <= 0; gacc <= 0; own_addr <= V_BASE; st <= S_W51; end
-            S_SG1: begin vv <= ram_rdata; own_addr <= VPR_BASE + i; st <= S_W52; end
-            S_SG2: begin gv <= ram_rdata; sa <= vv; sb <= gv; ssub <= 1; st <= S_SG3; end
-            S_SG3: begin a1 <= so1; b1 <= so1; st <= S_SG4; end
-            S_SG4: begin sc <= gacc; sd <= po1; ssub2 <= 0; st <= S_SG5; end
-            S_SG5: begin
-                gacc <= so2;
-                if (i + 1 >= L) st <= S_SG6;
-                else begin i <= i + 1; own_addr <= V_BASE + i; st <= S_W53; end
-            end
-            S_SG6: begin rs_start <= 1; rs_in <= gacc; st <= S_SG7; end
-            S_SG7: begin
-                rs_done_p <= rs_done;
-                if (rs_done && !rs_done_p) begin
-                    // safeguard reject iff ||diff|| > AA_SAFEGUARD*||x-f|| (scs_faithful).
-                    // norm_g_r = 1/||x-f|| and rs_o = 1/||diff|| are rsqrt RECIPROCALS,
-                    // so reject iff 1/||x-f|| > 1/||diff||  i.e. cmp_a(=1/||x-f||)
-                    // > cmp_b(=1/||diff||). AA_SAFEGUARD=1.0 so norm_g_r*AA_SAFEGUARD
-                    // == norm_g_r. FIX: cmp_a<=po2(threshold side), cmp_b<=rs_o(diff side).
-                    a2 <= norm_g_r; b2 <= AA_SAFEGUARD; cmp_b <= rs_o; st <= S_SG8;
-                end
-            end
-            S_SG8: begin cmp_a <= po2; st <= S_SG9; end
-            S_SG9: begin
-                // scs_faithful.safeguard returns early unless the LAST apply
-                // actually solved (self.success), which happens only from the
-                // 11th apply onward (aa.iter >= AA_MINLEN=10). aa_cnt is 1-based:
-                // checks are meaningful from aa_cnt >= 11.
-                if (cmp_gt && aa_cnt >= 11) st <= S_SC0;      // reject: roll back
-                else st <= S_DONE;
-            end
-            // ============ rollback: SAFEV->v, SAFEVP->v_prev ============
-            S_SC0: begin i <= 0; own_addr <= SAFEV_BASE; st <= S_W54; end
-            S_SC1: begin vv <= ram_rdata; own_addr <= V_BASE + i; st <= S_W55; end
-            S_SC2: begin
-                own_addr <= V_BASE + i; own_wdata <= vv; own_we <= 1; st <= S_SC3;
-            end
-            S_SC3: begin
-                if (i + 1 >= L) st <= S_SCP0;
-                // forward-addr MUST be BASE+i+1 (non-blocking i and addr update
-                // in the same cycle with the OLD i; +1 pre-reads the NEXT element)
-                else begin i <= i + 1; own_addr <= SAFEV_BASE + i + 1; st <= S_W56; end
-            end
-            S_SCP0: begin i <= 0; own_addr <= SAFEVP_BASE; st <= S_W57; end
-            S_SCP1: begin vv <= ram_rdata; own_addr <= VPR_BASE + i; st <= S_W58; end
-            S_SCP2: begin
-                own_addr <= VPR_BASE + i; own_wdata <= vv; own_we <= 1; st <= S_SCP3;
-            end
-            S_SCP3: begin
-                if (i + 1 >= L) st <= S_DONE;
-                else begin i <= i + 1; own_addr <= SAFEVP_BASE + i + 1; st <= S_W59; end
-            end
-
             // ============ scale update: recompute diag_r[n:n+m] + D_y, then
-            // rebuild band (s_build), g = KKT^-1[c;-b], aa.reset, v remap ============
+            // rebuild band (s_build), g = KKT^-1[c;-b], v remap ============
             S_SX0: begin
                 // rinv = 1/scale (one division); scale_cur holds the scale to use
                 // (set in S_IDLE for an external scale_valid, or by the residual
@@ -813,14 +659,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                 end
             end
             S_GKSD: begin
-                if (ks_done) begin gks_active <= 0; aa_reset_s <= 1; st <= S_AAR; end
-            end
-            // ---- anderson reset (clear history, aa_cnt) ----
-            S_AAR: begin aa_reset_s <= 1; st <= S_AARW; end
-            S_AARW: begin
-                if (aa_done) begin
-                    aa_reset_s <= 0; aa_cnt <= 0; i <= 0; own_addr <= RSK_BASE; st <= S_W70;
-                end
+                if (ks_done) begin gks_active <= 0; i <= 0; own_addr <= RSK_BASE; st <= S_W70; end
             end
             // ---- v remap: v = rsk/diag_r + 2*u_t - u (all l-1 elements) ----
             S_VR0: begin i <= 0; own_addr <= RSK_BASE; st <= S_W71; end
@@ -1001,7 +840,6 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             S_W11: begin st <= S_INIT1; end
             S_W12: begin st <= S_INIT1; end
             S_W13: begin st <= S_VPC0; end
-            S_W14: begin st <= S_AA0; end
             S_W15: begin st <= S_NM0; end
             S_W16: begin st <= S_NM1; end
             S_W17: begin st <= S_NM2; end
@@ -1010,10 +848,6 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             S_W20: begin st <= S_NMV2; end
             S_W21: begin st <= S_VPC0; end
             S_W22: begin st <= S_NMV1; end
-            S_W23: begin st <= S_AA1; end
-            S_W24: begin st <= S_AA2; end
-            S_W25: begin st <= S_AA1; end
-            S_W26: begin st <= S_NM0; end
             S_W27: begin st <= S_VPC2; end
             S_W28: begin st <= S_KSDONE_ETA; end
             S_W29: begin st <= S_RP1; end
@@ -1036,17 +870,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             S_W46: begin st <= S_V1; end
             S_W47: begin st <= S_V2; end
             S_W48: begin st <= S_V3; end
-            S_W49: begin st <= S_SG0; end
             S_W50: begin st <= S_V1; end
-            S_W51: begin st <= S_SG1; end
-            S_W52: begin st <= S_SG2; end
-            S_W53: begin st <= S_SG1; end
-            S_W54: begin st <= S_SC1; end
-            S_W55: begin st <= S_SC2; end
-            S_W56: begin st <= S_SC1; end
-            S_W57: begin st <= S_SCP1; end
-            S_W58: begin st <= S_SCP2; end
-            S_W59: begin st <= S_SCP1; end
             S_W60: begin st <= S_GKS0; end
             S_W61: begin st <= S_GKSRY0; end
             S_W62: begin st <= S_GKSDY0; end
