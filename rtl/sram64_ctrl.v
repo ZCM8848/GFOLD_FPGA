@@ -31,6 +31,7 @@ module sram64_ctrl #(parameter AW = 18) (
     reg        oe_n, we_n, ce_n, dq_oe;
     reg [15:0] dq_out;
     reg [3:0]  st;
+    reg        req_p;   // rising-edge detect: req may be held high by the arbiter
 
     assign SRAM_ADDR = base + hw;
     assign SRAM_DQ   = dq_oe ? dq_out : 16'hz;
@@ -50,10 +51,12 @@ module sram64_ctrl #(parameter AW = 18) (
             hw <= 0; base <= 0; wd_lat <= 0;
             rd0 <= 0; rd1 <= 0; rd2 <= 0; rd3 <= 0;
             oe_n <= 1; we_n <= 1; ce_n <= 1; dq_oe <= 0; dq_out <= 0;
+            req_p <= 0;
         end else begin
+            req_p <= req;
             case (st)
             S_IDLE: begin
-                if (req) begin
+                if (req && !req_p) begin
                     base <= {waddr, 2'b00};
                     wd_lat <= wdata;
                     hw <= 0;

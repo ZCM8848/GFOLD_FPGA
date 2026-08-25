@@ -25,6 +25,7 @@
 // then done pulses.
 module kkt_solve #(
     parameter N = 10, M = 20, NNZ = 41, HB = 4,
+    parameter AA_BASE = 0,   // SRAM word offset for LDL arrays (past Anderson region)
     parameter RAM_AW = 14,
     parameter AROW_FILE = "../data/kkt/small/Arow.hex",
     parameter ACOL_FILE = "../data/kkt/small/Acol.hex",
@@ -54,7 +55,15 @@ module kkt_solve #(
     // output stream: N zx words then M zy words
     output reg  [63:0]   z_out,
     output reg           o_valid,
-    output reg           done
+    output reg           done,
+    // ---- LDL external SRAM (arbiter-routed at drs_iter level) ----
+    output wire           ldl_sram_req, ldl_sram_we,
+    output wire  [17:0]   ldl_sram_waddr,
+    output wire  [63:0]   ldl_sram_wdata,
+    input  wire          ldl_sram_busy,
+    input  wire [63:0]   ldl_sram_rdata,
+    // ---- LDL band ready (back-pressure to the upstream band streamer) ----
+    output wire           band_ready
 );
     localparam LMAX = (N > M) ? N : M;
     localparam AD_ATVY = LMAX;          // spmv1 out region (A^T vy, N words)
@@ -105,11 +114,15 @@ module kkt_solve #(
     reg  [63:0] ldl_band_in, ldl_rhs_in;
     wire [63:0] ldl_zx_out;
     wire        ldl_zx_valid, ldl_done_w;
-    banded_ldl_fp64_rb #(.N(N), .HB(HB)) u_ldl(
+    wire        ldl_band_ready_w, ldl_rhs_ready_w;
+    banded_ldl_fp64_rb #(.N(N), .HB(HB), .AA_BASE(AA_BASE)) u_ldl(
         .clk(clk), .rst_n(rst_n), .start(ldl_start), .refactor(refactor),
-        .band_in(ldl_band_in), .band_valid(ldl_band_valid),
-        .rhs_in(ldl_rhs_in), .rhs_valid(ldl_rhs_valid),
-        .zx_out(ldl_zx_out), .zx_valid(ldl_zx_valid), .done(ldl_done_w), .status());
+        .band_in(ldl_band_in), .band_valid(ldl_band_valid), .band_ready(ldl_band_ready_w),
+        .rhs_in(ldl_rhs_in), .rhs_valid(ldl_rhs_valid), .rhs_ready(ldl_rhs_ready_w),
+        .zx_out(ldl_zx_out), .zx_valid(ldl_zx_valid), .done(ldl_done_w), .status(),
+        .sram_req(ldl_sram_req), .sram_we(ldl_sram_we), .sram_waddr(ldl_sram_waddr),
+        .sram_wdata(ldl_sram_wdata), .sram_busy(ldl_sram_busy), .sram_rdata(ldl_sram_rdata));
+    assign band_ready = ldl_band_ready_w;   // back-pressure to the band streamer
 
     // ---- own FP64 arithmetic (combinational units, spmv pattern) ----
     // rhs_x = rho_x*vx - A^T vy  (all combinational from regs vx_i/atvy_i)
@@ -168,8 +181,9 @@ module kkt_solve #(
             ry_reg <= 0; dy_reg <= 0;
         end else begin
             o_valid <= 0; own_we <= 0;
-            sp1_din_valid <= 0; sp2_din_valid <= 0; ldl_band_valid <= 0;
+            sp1_din_valid <= 0; sp2_din_valid <= 0;
             ldl_rhs_valid <= 0; ldl_start <= 0;
+            if (ldl_band_valid && !ldl_band_ready_w) ldl_band_valid <= 0;   // clear after LDL sampled
             case (st)
             S_IDLE: begin
                 done <= 0;
@@ -199,7 +213,7 @@ module kkt_solve #(
             end
             // ---- stream (HB+1)*N band words into LDL (only when refactor=1) ----
             S_BAND: begin
-                if (band_valid) begin
+                if (band_valid && ldl_band_ready_w && !ldl_band_valid) begin
                     ldl_band_valid <= 1; ldl_band_in <= band_in;
                     if (wp + 1 >= (HB+1)*N) begin wp <= 0; st <= S_VX; end
                     else wp <= wp + 1;
@@ -247,9 +261,11 @@ module kkt_solve #(
             S_RHS1: begin vx_i <= ram_rdata; own_addr <= AD_ATVY + i; st <= S_RHS2; end
             S_RHS2: begin atvy_i <= ram_rdata; st <= S_RHS3; end
             S_RHS3: begin
-                ldl_rhs_in <= so_rhs; ldl_rhs_valid <= 1;
-                if (i + 1 >= N) begin zo <= 0; st <= S_ZCAP; end
-                else begin i <= i + 1; st <= S_RHS0; end
+                if (ldl_rhs_ready_w) begin
+                    ldl_rhs_in <= so_rhs; ldl_rhs_valid <= 1;
+                    if (i + 1 >= N) begin zo <= 0; st <= S_ZCAP; end
+                    else begin i <= i + 1; st <= S_RHS0; end
+                end
             end
             // ---- capture zx from LDL into zx_arr + RAM[AD_VX + zo] (vx dead).
             //      LDL streams one word/cycle, so capture must take ONE state

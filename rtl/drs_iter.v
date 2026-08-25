@@ -51,7 +51,13 @@ module drs_iter #(
     output wire [63:0]       kkt_wdata,
     output wire              kkt_we,
     input  wire [63:0]       kkt_rdata,
-    output reg               done
+    output reg               done,
+    // ---- LDL band ready (back-pressure to the upstream band streamer) ----
+    output wire              band_ready,
+    // ---- external SRAM (sram64_ctrl; shared by Anderson + LDL via arbiter) ----
+    output wire [19:0]       SRAM_ADDR,
+    inout  wire [15:0]       SRAM_DQ,
+    output wire              SRAM_CE_N, SRAM_OE_N, SRAM_WE_N, SRAM_UB_N, SRAM_LB_N
 );
     localparam V_BASE  = 0;
     localparam UT_BASE = L;
@@ -129,7 +135,17 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     reg  [63:0] ks_band_in, ks_x_in, ks_ry_in, ks_dy_in;
     wire [63:0] ks_z_out;
     wire        ks_o_valid, ks_done;
+    wire ks_sram_req, ks_sram_we; wire [17:0] ks_sram_waddr; wire [63:0] ks_sram_wdata;
+    wire ks_sram_busy; wire [63:0] ks_sram_rdata;
+    wire ks_band_ready;
+    reg band_valid_p;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) band_valid_p <= 0;
+        else band_valid_p <= band_valid;
+    end
+    wire band_valid_rise = band_valid && !band_valid_p;   // one sample per tb word
     kkt_solve #(.N(N), .M(M), .NNZ(NNZ), .HB(HB),
+                .AA_BASE(4*L + 3*L*10),   // SRAM word offset past the Anderson region (109072)
                 .AROW_FILE(AROW_FILE), .ACOL_FILE(ACOL_FILE), .AVAL_FILE(AVAL_FILE),
                 .RY_FILE("../data/kkt/full/r_y_r.hex"), .DY_FILE("../data/kkt/full/Dy_r.hex")) u_ks(
         .clk(clk), .rst_n(rst_n), .start(ks_start),
@@ -139,7 +155,10 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
         .x_in(ks_x_in), .din_valid(ks_din_valid),
         .ram_addr(kkt_addr), .ram_wdata(kkt_wdata), .ram_we(kkt_we),
         .ram_rdata(kkt_rdata),
-        .z_out(ks_z_out), .o_valid(ks_o_valid), .done(ks_done));
+        .z_out(ks_z_out), .o_valid(ks_o_valid), .done(ks_done),
+        .ldl_sram_req(ks_sram_req), .ldl_sram_we(ks_sram_we), .ldl_sram_waddr(ks_sram_waddr),
+        .ldl_sram_wdata(ks_sram_wdata), .ldl_sram_busy(ks_sram_busy), .ldl_sram_rdata(ks_sram_rdata),
+        .band_ready(ks_band_ready));
 
     // ---- s_build (scale update: rebuild S band from D_y + A COO) ----
     reg  sb_start;
@@ -196,9 +215,54 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     wire [63:0] aa_fout;
     wire aa_o_valid, aa_done;
     reg  aa_reset_s;
+    wire aa_sram_req, aa_sram_we; wire [17:0] aa_sram_waddr; wire [63:0] aa_sram_wdata;
+    wire aa_sram_busy; wire [63:0] aa_sram_rdata;
     anderson #(.DIM(L), .MEM(10)) u_aa(.clk(clk), .rst_n(rst_n), .aa_reset(aa_reset_s), .start(aa_start),
         .x_in(aa_x), .f_in(aa_f), .din_valid(aa_dv), .rdy(aa_rdy),
-        .f_out(aa_fout), .o_valid(aa_o_valid), .done(aa_done));
+        .f_out(aa_fout), .o_valid(aa_o_valid), .done(aa_done),
+        .sram_req(aa_sram_req), .sram_we(aa_sram_we), .sram_waddr(aa_sram_waddr),
+        .sram_wdata(aa_sram_wdata), .sram_busy(aa_sram_busy), .sram_rdata(aa_sram_rdata));
+
+    // ---- external SRAM arbiter (Anderson + LDL -> sram64_ctrl) ----
+    wire sram_req, sram_we; wire [17:0] sram_waddr; wire [63:0] sram_wdata;
+    wire sram_busy; wire [63:0] sram_rdata;
+    reg a_grant, l_grant;
+    reg a_fall_p, l_fall_p;
+    reg sram_busy_p;
+    always @(posedge clk) sram_busy_p <= sram_busy;
+    // release ONLY on the busy falling edge (a grant issued while the ctrl was
+    // idle would otherwise be dropped before it starts; client busy routing
+    // then reads 0 and the client stalls forever waiting for busy)
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin a_grant <= 0; l_grant <= 0; a_fall_p <= 0; l_fall_p <= 0; end
+        else begin
+            // fall markers: 1 cycle AFTER the busy falling edge, so the client's
+            // read data (sampled when sram_done pulses) still sees the grant held
+            // and gets the real rdata instead of the routed 0
+            a_fall_p <= (a_grant && sram_busy_p && !sram_busy);
+            l_fall_p <= (l_grant && sram_busy_p && !sram_busy);
+            if (a_fall_p) a_grant <= 0;
+            if (l_fall_p) l_grant <= 0;
+            if (!a_grant && !l_grant) begin
+                if (aa_sram_req) a_grant <= 1;
+                else if (ks_sram_req) l_grant <= 1;
+            end
+        end
+    end
+    assign sram_req   = a_grant || l_grant;   // held during grant; ctrl uses rising edge
+    assign sram_we    = a_grant ? aa_sram_we : ks_sram_we;
+    assign sram_waddr = a_grant ? aa_sram_waddr : ks_sram_waddr;
+    assign sram_wdata = a_grant ? aa_sram_wdata : ks_sram_wdata;
+    assign aa_sram_busy  = a_grant ? sram_busy : 1'b0;
+    assign aa_sram_rdata = a_grant ? sram_rdata : 64'h0;
+    assign ks_sram_busy  = l_grant ? sram_busy : 1'b0;
+    assign ks_sram_rdata = l_grant ? sram_rdata : 64'h0;
+    assign band_ready = (st == S_KSBAND) && ks_band_ready;
+    sram64_ctrl #(.AW(18)) u_sram(.clk(clk), .rst_n(rst_n), .req(sram_req), .we(sram_we),
+        .waddr(sram_waddr), .wdata(sram_wdata), .busy(sram_busy), .rdata(sram_rdata),
+        .SRAM_ADDR(SRAM_ADDR), .SRAM_DQ(SRAM_DQ), .SRAM_CE_N(SRAM_CE_N),
+        .SRAM_OE_N(SRAM_OE_N), .SRAM_WE_N(SRAM_WE_N), .SRAM_UB_N(SRAM_UB_N),
+        .SRAM_LB_N(SRAM_LB_N));
     // AA round: iter>0 and iter%10==0
     wire aa_round = (iter != 0) && (iter % 10 == 0);
     // FP64 comparison (a > b), combinational, no NaN/denormal handling needed here
@@ -328,6 +392,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             saty_start <= 0; saty_din_valid <= 0;
             sax_start <= 0; sax_din_valid <= 0;
             aa_start <= 0; aa_dv <= 0;
+            if (ks_band_valid && !ks_band_ready) ks_band_valid <= 0;   // level-held: clear after LDL sampled
             own_we <= 0;
             scale_valid_p <= scale_valid;
             case (st)
@@ -404,8 +469,11 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             end
             S_AA7: begin
                 own_addr <= SAFEVP_BASE + i; own_wdata <= aa_xr; own_we <= 1;
-                if (i + 1 >= L) begin i <= 0; st <= S_AA8; end
-                else begin i <= i + 1; own_addr <= VPR_BASE + i + 1; st <= S_AA1; end
+                if (aa_rdy || i + 1 >= L) begin
+                    aa_dv <= 0;   // clear after Anderson sampled (level-held valid)
+                    if (i + 1 >= L) begin i <= 0; st <= S_AA8; end
+                    else begin i <= i + 1; own_addr <= VPR_BASE + i + 1; st <= S_AA1; end
+                end
             end
             S_AA8: begin
                 aa_dv <= 0;
@@ -445,7 +513,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                 if (refactor) st <= S_KSBAND; else st <= S_KSVX;
             end
             S_KSBAND: begin
-                if (band_valid) begin
+                if (band_valid_rise && ks_band_ready && !ks_band_valid) begin
                     ks_band_valid <= 1; ks_band_in <= band_in;
                     if (i + 1 >= (HB+1)*N) begin i <= 0; st <= S_KSVX; end
                     else i <= i + 1;

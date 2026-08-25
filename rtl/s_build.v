@@ -78,8 +78,8 @@ module s_build #(
     wire [15:0] dc_w = c_hi_w - c_lo_w;
 
     localparam S_IDLE=0, S_CLEAR=1, S_DIAG=2, S_ROWINIT=3, S_LOAD=4,
-               S_ROWEND=5, S_ROWEND_DY=6, S_PAIR=7, S_PAIR_BAND=8,
-               S_PAIR_M2ACC=9, S_PAIR_W=10, S_PAIRADV=11, S_ROWDONE=12, S_DONE=13;
+               S_ROWEND=5, S_ROWEND_W=6, S_ROWEND_DY=7, S_PAIR=8, S_PAIR_BAND=9,
+               S_PAIR_BAND_W=10, S_PAIR_M2ACC=11, S_PAIR_W=12, S_PAIRADV=13, S_ROWDONE=14, S_DONE=15;
     reg [3:0] st;
 
     always @(posedge clk or negedge rst_n) begin
@@ -129,7 +129,10 @@ module s_build #(
             end
             // ---- row complete: read D_y[cur_row] (RAM, data-derived row idx) ----
             S_ROWEND: begin
-                ram_addr <= DY_OFFSET + cur_row; pa <= 0; pb <= 0; st <= S_ROWEND_DY;
+                ram_addr <= DY_OFFSET + cur_row; pa <= 0; pb <= 0; st <= S_ROWEND_W;
+            end
+            S_ROWEND_W: begin
+                st <= S_ROWEND_DY;   // wait 1 cyc for sync RAM read
             end
             S_ROWEND_DY: begin
                 dy_row <= ram_rdata; st <= S_PAIR;
@@ -140,8 +143,11 @@ module s_build #(
                 else begin
                     pa_col <= c_lo_w; dc_r <= dc_w;
                     ram_addr <= BAND_OFFSET + c_lo_w*(HB+1) + dc_w;
-                    st <= S_PAIR_BAND;
+                    st <= S_PAIR_BAND_W;
                 end
+            end
+            S_PAIR_BAND_W: begin
+                st <= S_PAIR_BAND;   // wait 1 cyc for sync RAM read
             end
             S_PAIR_BAND: begin
                 band_r <= ram_rdata; t1_r <= po_m1; st <= S_PAIR_M2ACC;

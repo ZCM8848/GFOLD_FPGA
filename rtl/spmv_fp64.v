@@ -55,8 +55,8 @@ module spmv_fp64 #(parameter N = 10, M = 20, NNZ = 41,
     reg [31:0] wp, kk, op;
     reg [AW-1:0] acc_r, src_r;
 
-    localparam S_IDLE=0, S_CLR=1, S_X=2, S_A0=3, S_A1=4, S_A2=5, S_A3=6, S_A4=7,
-               S_A5=8, S_A6=9, S_OUT0=10, S_OUT1=11, S_DONE=12;
+    localparam S_IDLE=0, S_CLR=1, S_X=2, S_A0=3, S_A1=4, S_A1W=5, S_A2=6, S_A2W=7, S_A3=8, S_A4=9,
+               S_A5=10, S_A6=11, S_OUT0=12, S_OUT1W=13, S_OUT1=14, S_DONE=15;
     reg [3:0] st;
 
     always @(posedge clk or negedge rst_n) begin
@@ -93,10 +93,12 @@ module spmv_fp64 #(parameter N = 10, M = 20, NNZ = 41,
                 src_r <= transpose ? Arow[kk] : Acol[kk];
                 st <= S_A1;
             end
-            S_A1: begin ram_addr <= src_r; st <= S_A2; end          // read x[src_r]
+            S_A1: begin ram_addr <= src_r; st <= S_A1W; end          // read x[src_r]
+            S_A1W: begin st <= S_A2; end                              // wait 1 cyc for sync RAM
             S_A2: begin
-                xv <= ram_rdata; ram_addr <= OFF + acc_r; st <= S_A3;  // read out[acc_r]
+                xv <= ram_rdata; ram_addr <= OFF + acc_r; st <= S_A2W;  // read out[acc_r]
             end
+            S_A2W: begin st <= S_A3; end
             S_A3: begin
                 cur <= ram_rdata; pa <= Aval[kk]; pb <= xv; st <= S_A4;
             end
@@ -110,7 +112,8 @@ module spmv_fp64 #(parameter N = 10, M = 20, NNZ = 41,
                 else begin kk <= kk + 1; st <= S_A0; end
             end
             // ---- stream LENO out words (addr set, then async-read next cycle) ----
-            S_OUT0: begin ram_addr <= OFF + op; st <= S_OUT1; end
+            S_OUT0: begin ram_addr <= OFF + op; st <= S_OUT1W; end
+            S_OUT1W: begin st <= S_OUT1; end
             S_OUT1: begin
                 out_out <= ram_rdata; o_valid <= 1;
                 if (op + 1 >= LENO) begin op <= op + 1; st <= S_DONE; end

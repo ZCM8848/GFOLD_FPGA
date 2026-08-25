@@ -17,8 +17,8 @@
 // SRAM PORT (2026-08-25): the big persistent arrays (xarr/farr/garr/gprev/S/D/Y,
 // 109072 x 64-bit words = 872 KB at DIM=3208) live in the EXTERNAL SRAM via the
 // sram64_ctrl word interface (one 64-bit access = 6 cycles). acc_s/acc_y/Gbuf/
-// rhsbuf/gamma stay in M9K (small). Main-FSM access pattern: set sram_wa/sram_wdata/
-// sram_we, pulse sram_start, wait sram_done (rdata valid for reads).
+// rhsbuf/gamma stay in M9K (small). Main-FSM access pattern: set sram_wa/my_sram_wdata/
+// my_sram_we, pulse sram_start, wait sram_done (rdata valid for reads).
 module anderson #(
     parameter DIM = 8,
     parameter MEM = 10
@@ -35,9 +35,9 @@ module anderson #(
     output reg              o_valid,
     output reg              done,
     // ---- external SRAM (64-bit word interface via sram64_ctrl) ----
-    output reg              sram_req, sram_we,
-    output reg  [17:0]      sram_waddr,
-    output reg  [63:0]      sram_wdata,
+    output wire             sram_req, sram_we,
+    output wire  [17:0]     sram_waddr,
+    output wire  [63:0]     sram_wdata,
     input  wire             sram_busy,
     input  wire  [63:0]     sram_rdata
 );
@@ -60,22 +60,32 @@ module anderson #(
     reg [31:0] iter;
 
     // ---------- SRAM access handshake (sub-FSM) ----------
-    // Main FSM sets sram_wa/sram_wdata/sram_we + pulses sram_start; sram_done
-    // pulses when the access completes (rdata valid for reads).
+    // Main FSM sets my_sram_waddr/my_sram_wdata/my_sram_we + pulses sram_start;
+    // sram_done pulses when the access completes (rdata valid for reads).
     reg sram_start;
+    reg my_sram_req, my_sram_we;
+    reg [17:0] my_sram_waddr;
+    reg [63:0] my_sram_wdata;
     reg sram_done_r;
     reg [1:0] sst;
+    // ---- din_valid rising-edge detect (level-held upstream valid, one sample per word) ----
+    reg din_valid_p;
     always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin sst <= 0; sram_req <= 0; sram_done_r <= 0; end
+        if (!rst_n) din_valid_p <= 0;
+        else din_valid_p <= din_valid;
+    end
+    wire din_valid_rise = din_valid && !din_valid_p;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin sst <= 0; my_sram_req <= 0; sram_done_r <= 0; end
         else begin
             sram_done_r <= 0;
             case (sst)
             0: begin
-                if (sram_start) begin sram_req <= 1; sst <= 1; end
-                else sram_req <= 0;
+                if (sram_start) begin my_sram_req <= 1; sst <= 1; end
+                else my_sram_req <= 0;
             end
             1: begin
-                sram_req <= 0;
+                my_sram_req <= 0;
                 if (sram_busy) sst <= 2;
             end
             2: begin
@@ -102,9 +112,26 @@ module anderson #(
 
     // ---------- sub-modules ----------
     reg ag_start, ag_dv; reg [63:0] ag_s, ag_g; wire ag_done, ag_o_valid; wire [63:0] ag_gout, ag_rout;
+    wire ag_sram_req, ag_sram_we; wire [17:0] ag_sram_waddr; wire [63:0] ag_sram_wdata;
+    wire ag_sram_busy; wire [63:0] ag_sram_rdata;
+    reg ag_busy;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) ag_busy <= 0;
+        else if (ag_start) ag_busy <= 1;
+        else if (ag_done) ag_busy <= 0;
+    end
+    // ---- SRAM port routing: aa_gram owns the port while active ----
+    assign sram_req   = ag_busy ? ag_sram_req   : my_sram_req;
+    assign sram_we    = ag_busy ? ag_sram_we    : my_sram_we;
+    assign sram_waddr = ag_busy ? ag_sram_waddr : my_sram_waddr;
+    assign sram_wdata = ag_busy ? ag_sram_wdata : my_sram_wdata;
+    assign ag_sram_busy  = ag_busy ? sram_busy  : 1'b0;
+    assign ag_sram_rdata = ag_busy ? sram_rdata : 64'h0;
     aa_gram #(.DIM(DIM),.MEM(MEM)) UAG(.clk(clk),.rst_n(rst_n),.start(ag_start),
         .s_in(ag_s),.g_in(ag_g),.rreg_in(rreg),.din_valid(ag_dv),
-        .done(ag_done),.g_out(ag_gout),.r_out(ag_rout),.o_valid(ag_o_valid));
+        .done(ag_done),.g_out(ag_gout),.r_out(ag_rout),.o_valid(ag_o_valid),
+        .sram_req(ag_sram_req),.sram_we(ag_sram_we),.sram_waddr(ag_sram_waddr),
+        .sram_wdata(ag_sram_wdata),.sram_busy(ag_sram_busy),.sram_rdata(ag_sram_rdata));
     reg ch_start, ch_dv; reg [63:0] ch_g, ch_r; wire ch_done, ch_o_valid; wire [63:0] ch_gamma;
     chol10 #(.MEM(MEM)) UCH(.clk(clk),.rst_n(rst_n),.start(ch_start),
         .g_in(ch_g),.r_in(ch_r),.din_valid(ch_dv),
@@ -141,7 +168,7 @@ module anderson #(
             m0a <= 0; m0b <= 0; m1a <= 0; m1b <= 0; rs_x <= 0;
             Sreg <= 0; Dreg <= 0; Greg <= 0; Yreg <= 0; sq_s <= 0; sq_y <= 0;
             fsum <= 0; frob_s <= 0; frob_y <= 0; rreg <= 0; appacc <= 0;
-            sram_start <= 0; sram_we <= 0; sram_waddr <= 0; sram_wdata <= 0;
+            sram_start <= 0; my_sram_we <= 0; my_sram_waddr <= 0; my_sram_wdata <= 0;
         end else begin
             done <= 0; o_valid <= 0; rdy <= 0; rs_start <= 0; ag_start <= 0; ch_start <= 0;
             case (st)
@@ -159,7 +186,7 @@ module anderson #(
             S_ACLR: begin
                 // flat-index clear: SRAM words (TOT_SRAM) then acc_s/acc_y (2*MEM, M9K)
                 if (aclr < TOT_SRAM) begin
-                    sram_waddr <= aclr[17:0]; sram_wdata <= 0; sram_we <= 1;
+                    my_sram_waddr <= aclr[17:0]; my_sram_wdata <= 0; my_sram_we <= 1;
                     sram_start <= 1; st <= S_ACLRW;
                 end else if (aclr < TOT_SRAM + MEM) begin
                     acc_s[aclr - TOT_SRAM] <= 0;
@@ -178,24 +205,24 @@ module anderson #(
             // ================= iter==0 load: xarr=x, farr=f, g_prev=x-f =================
             S_L0: begin
                 rdy <= 1;
-                if (din_valid) begin
+                if (din_valid_rise) begin
                     rdy <= 0;
                     a2a <= x_in; a2b <= f_in;         // g = x - f
-                    sram_waddr <= XARR_BASE + wcnt; sram_wdata <= x_in; sram_we <= 1;
+                    my_sram_waddr <= XARR_BASE + wcnt; my_sram_wdata <= x_in; my_sram_we <= 1;
                     sram_start <= 1; st <= S_L0W1;
                 end
             end
             S_L0W1: begin
                 sram_start <= 0;
                 if (sram_done) begin
-                    sram_waddr <= FARR_BASE + wcnt; sram_wdata <= f_in; sram_we <= 1;
+                    my_sram_waddr <= FARR_BASE + wcnt; my_sram_wdata <= f_in; my_sram_we <= 1;
                     sram_start <= 1; st <= S_L0W2;
                 end
             end
             S_L0W2: begin
                 sram_start <= 0;
                 if (sram_done) begin
-                    sram_waddr <= GPREV_BASE + wcnt; sram_wdata <= a2o; sram_we <= 1;
+                    my_sram_waddr <= GPREV_BASE + wcnt; my_sram_wdata <= a2o; my_sram_we <= 1;
                     sram_start <= 1; st <= S_L0W3;
                 end
             end
@@ -213,10 +240,10 @@ module anderson #(
             end
             S_LA: begin
                 rdy <= 1;
-                if (din_valid) begin
+                if (din_valid_rise) begin
                     rdy <= 0;
                     a2a <= x_in; a2b <= f_in;         // g = x - f
-                    sram_waddr <= XARR_BASE + wcnt; sram_we <= 0;
+                    my_sram_waddr <= XARR_BASE + wcnt; my_sram_we <= 0;
                     sram_start <= 1; st <= S_LAW1;    // read xarr[wcnt]
                 end
             end
@@ -224,7 +251,7 @@ module anderson #(
                 sram_start <= 0;
                 if (sram_done) begin
                     a0a <= x_in; a0b <= sram_rdata;   // S = x - xarr
-                    sram_waddr <= FARR_BASE + wcnt; sram_we <= 0;
+                    my_sram_waddr <= FARR_BASE + wcnt; my_sram_we <= 0;
                     sram_start <= 1; st <= S_LAW2;    // read farr[wcnt]
                 end
             end
@@ -232,14 +259,14 @@ module anderson #(
                 sram_start <= 0;
                 if (sram_done) begin
                     a1a <= f_in; a1b <= sram_rdata;   // D = f - farr
-                    sram_waddr <= XARR_BASE + wcnt; sram_wdata <= x_in; sram_we <= 1;
+                    my_sram_waddr <= XARR_BASE + wcnt; my_sram_wdata <= x_in; my_sram_we <= 1;
                     sram_start <= 1; st <= S_LAW3;    // write xarr[wcnt]
                 end
             end
             S_LAW3: begin
                 sram_start <= 0;
                 if (sram_done) begin
-                    sram_waddr <= FARR_BASE + wcnt; sram_wdata <= f_in; sram_we <= 1;
+                    my_sram_waddr <= FARR_BASE + wcnt; my_sram_wdata <= f_in; my_sram_we <= 1;
                     sram_start <= 1; st <= S_LAW4;    // write farr[wcnt]
                 end
             end
@@ -250,35 +277,35 @@ module anderson #(
             S_LB: begin
                 Sreg <= a0o; Dreg <= a1o; Greg <= a2o;
                 m0a <= a0o; m0b <= a0o;               // sq_s = S^2
-                sram_waddr <= GPREV_BASE + wcnt; sram_we <= 0;
+                my_sram_waddr <= GPREV_BASE + wcnt; my_sram_we <= 0;
                 sram_start <= 1; st <= S_LBW1;        // read gprev[wcnt]
             end
             S_LBW1: begin
                 sram_start <= 0;
                 if (sram_done) begin
                     a3a <= a2o; a3b <= sram_rdata;    // Y = g - g_prev
-                    sram_waddr <= S_BASE + wcnt*MEM + idx; sram_wdata <= a0o; sram_we <= 1;
+                    my_sram_waddr <= S_BASE + wcnt*MEM + idx; my_sram_wdata <= a0o; my_sram_we <= 1;
                     sram_start <= 1; st <= S_LBW2;    // write S
                 end
             end
             S_LBW2: begin
                 sram_start <= 0;
                 if (sram_done) begin
-                    sram_waddr <= D_BASE + wcnt*MEM + idx; sram_wdata <= a1o; sram_we <= 1;
+                    my_sram_waddr <= D_BASE + wcnt*MEM + idx; my_sram_wdata <= a1o; my_sram_we <= 1;
                     sram_start <= 1; st <= S_LBW3;    // write D
                 end
             end
             S_LBW3: begin
                 sram_start <= 0;
                 if (sram_done) begin
-                    sram_waddr <= GARR_BASE + wcnt; sram_wdata <= a2o; sram_we <= 1;
+                    my_sram_waddr <= GARR_BASE + wcnt; my_sram_wdata <= a2o; my_sram_we <= 1;
                     sram_start <= 1; st <= S_LBW4;    // write garr
                 end
             end
             S_LBW4: begin
                 sram_start <= 0;
                 if (sram_done) begin
-                    sram_waddr <= GPREV_BASE + wcnt; sram_wdata <= a2o; sram_we <= 1;
+                    my_sram_waddr <= GPREV_BASE + wcnt; my_sram_wdata <= a2o; my_sram_we <= 1;
                     sram_start <= 1; st <= S_LBW5;    // write gprev
                 end
             end
@@ -290,7 +317,7 @@ module anderson #(
                 Yreg <= a3o; sq_s <= m0o;
                 m1a <= a3o; m1b <= a3o;               // sq_y = Y^2
                 a4a <= acc_s[idx]; a4b <= m0o; a4sub <= 0;   // acc_s += S^2
-                sram_waddr <= Y_BASE + wcnt*MEM + idx; sram_wdata <= a3o; sram_we <= 1;
+                my_sram_waddr <= Y_BASE + wcnt*MEM + idx; my_sram_wdata <= a3o; my_sram_we <= 1;
                 sram_start <= 1; st <= S_LCW;         // write Y
             end
             S_LCW: begin
@@ -338,28 +365,8 @@ module anderson #(
             S_RREG0: begin m0a <= frob_s; m0b <= frob_y; st <= S_RREG1; end
             S_RREG1: begin m1a <= AA_R; m1b <= m0o; st <= S_RREG2; end
             S_RREG2: begin rreg <= m1o; st <= S_AG_LOAD; end
-            // ================= drive aa_gram: S (col-major MEM*DIM) + g (DIM) =================
-            S_AG_LOAD: begin ag_start <= 1; ag_dv <= 0; agw <= 0; st <= S_AG_STREAM; end
-            S_AG_STREAM: begin
-                ag_start <= 0; ag_dv <= 0;   // clear dv immediately (else 2-cycle pulse -> double-sample)
-                if (agw < MEM*DIM) begin
-                    sram_waddr <= S_BASE + (agw%DIM)*MEM + (agw/DIM); sram_we <= 0;
-                    sram_start <= 1; st <= S_AG_WAIT; // read S col-major
-                end else begin
-                    sram_waddr <= GARR_BASE + (agw - MEM*DIM); sram_we <= 0;
-                    sram_start <= 1; st <= S_AG_WAIT; // read garr
-                end
-            end
-            S_AG_WAIT: begin
-                sram_start <= 0; ag_dv <= 0;
-                if (sram_done) begin
-                    ag_dv <= 1;                  // data-valid pulse, one cycle
-                    if (agw < MEM*DIM) ag_s <= sram_rdata;
-                    else ag_g <= sram_rdata;
-                    if (agw + 1 >= MEM*DIM + DIM) begin agcnt <= 0; st <= S_AG_CAP; end
-                    else begin agw <= agw + 1; st <= S_AG_STREAM; end
-                end
-            end
+            // ============ drive aa_gram: it reads S/garr DIRECTLY from our SRAM layout ============
+            S_AG_LOAD: begin ag_start <= 1; agcnt <= 0; st <= S_AG_CAP; end
             S_AG_CAP: begin
                 if (ag_o_valid) begin
                     if (agcnt < MEM*MEM) begin Gbuf[agcnt] <= ag_gout; agcnt <= agcnt + 1; end
@@ -382,7 +389,7 @@ module anderson #(
             end
             // ================= APPLY: f_out = farr - D @ gamma =================
             S_APP1: begin
-                sram_waddr <= FARR_BASE + appi; sram_we <= 0;
+                my_sram_waddr <= FARR_BASE + appi; my_sram_we <= 0;
                 sram_start <= 1; st <= S_APP1W;       // read farr[appi]
             end
             S_APP1W: begin
@@ -392,7 +399,7 @@ module anderson #(
                 end
             end
             S_APP2: begin
-                sram_waddr <= D_BASE + appi*MEM + appj; sram_we <= 0;
+                my_sram_waddr <= D_BASE + appi*MEM + appj; my_sram_we <= 0;
                 sram_start <= 1; st <= S_APP2W;       // read D[appi][appj]
             end
             S_APP2W: begin
@@ -414,7 +421,7 @@ module anderson #(
             // ================= PASS: f_out = farr (no acceleration) =================
             S_PASS0: begin p_i <= 0; st <= S_PASS1; end
             S_PASS1: begin
-                sram_waddr <= FARR_BASE + p_i; sram_we <= 0;
+                my_sram_waddr <= FARR_BASE + p_i; my_sram_we <= 0;
                 sram_start <= 1; st <= S_PASS1W;      // read farr[p_i]
             end
             S_PASS1W: begin
