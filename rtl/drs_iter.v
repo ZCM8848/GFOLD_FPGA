@@ -123,7 +123,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     S_W17=226, S_W18=227, S_W19=228, S_W20=229, S_W21=230, S_W22=231, S_W23=232, S_W24=233,
     S_W25=234, S_W26=235, S_W27=236, S_W28=237, S_W29=238, S_W30=239, S_W31=240, S_W32=241,
     S_W33=242, S_W34=243, S_W35=244, S_W36=245, S_W37=246, S_W38=247, S_W39=248, S_W40=249,
-    S_W41=250, S_W42=251, S_W43=252, S_W44=253, S_W45=254, S_W46=255,S_W47=257,S_W48=258,S_W49=259,S_W50=260,S_W51=261,S_W52=262,S_W53=263,S_W54=264,S_W55=265,S_W56=266,S_W57=267,S_W58=268,S_W59=269,S_W60=270,S_W61=271,S_W62=272,S_W63=273,S_W64=274,S_W65=275,S_W66=276,S_W67=277,S_W68=278,S_W69=279,S_W70=280,S_W71=281,S_W72=282,S_W73=283,S_W74=284,S_W75=285,S_W76=286,S_W77=287,S_W78=288,S_W79=289,S_W80=290,S_W81=291,S_W82=292,S_W83=293,S_W84=294, S_W85=295;
+    S_W41=250, S_W42=251, S_W43=252, S_W44=253, S_W45=254, S_W46=255,S_W47=257,S_W48=258,S_W49=259,S_W50=260,S_W51=261,S_W52=262,S_W53=263,S_W54=264,S_W55=265,S_W56=266,S_W57=267,S_W58=268,S_W59=269,S_W60=270,S_W61=271,S_W62=272,S_W63=273,S_W64=274,S_W65=275,S_W66=276,S_W67=277,S_W68=278,S_W69=279,S_W70=280,S_W71=281,S_W72=282,S_W73=283,S_W74=284,S_W75=285,S_W76=286,S_W77=287,S_W78=288,S_W79=289,S_W80=290,S_W81=291,S_W82=292,S_W83=293,S_W84=294, S_W85=295, S_GKSBH=296;
     reg [8:0] st;   // 0..261 fits in 9 bits (sync-read waits S_W1..W46)
     // force refactor=1 during a scale-update g recompute (band comes from s_build)
     reg gks_active;
@@ -631,9 +631,22 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                 else begin i <= i + 1; own_addr <= DY_BASE + i + 1; st <= S_W64; end
             end
             S_GKSB: begin
-                ks_band_in <= ram_rdata; ks_band_valid <= 1;
-                if (i + 1 >= (HB + 1) * N) begin i <= 0; own_addr <= CB_BASE; st <= S_W3; end
-                else begin i <= i + 1; own_addr <= BAND_BASE + i + 1; st <= S_W65; end
+                // phase 1: wait for LDL ready (in S_BAND), then present word_i
+                if (ks_band_ready) begin
+                    ks_band_in <= ram_rdata; ks_band_valid <= 1;
+                    st <= S_GKSBH;
+                end
+                // else: LDL busy -> hold without presenting (valid stays low)
+            end
+            // phase 2: word_i presented; hold valid until LDL consumes it (ready falls)
+            S_GKSBH: begin
+                ks_band_valid <= 1;
+                if (!ks_band_ready) begin
+                    ks_band_valid <= 0;
+                    if (i + 1 >= (HB + 1) * N) begin i <= 0; own_addr <= CB_BASE; st <= S_W3; end
+                    else begin i <= i + 1; own_addr <= BAND_BASE + i + 1; st <= S_W65; end
+                end
+                // else: LDL still in S_BAND -> keep holding valid
             end
             // v_x[i] = c[i]/rho_x = c[i]*1e6  (1/rho_x = 1e6)
             S_GKSVX0: begin a2 <= ram_rdata; b2 <= 64'h412E848000000000; st <= S_GKSVX1; end
