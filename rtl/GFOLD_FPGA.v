@@ -41,11 +41,9 @@ module GFOLD_FPGA (
     wire [16:0] ram_addr;
     wire [63:0] ram_wdata;
     wire        ram_we;
-    wire [63:0] ram_rdata;
     wire [13:0] kkt_addr;
     wire [63:0] kkt_wdata;
     wire        kkt_we;
-    wire [63:0] kkt_rdata;
 
     drs_iter #(.N(N), .M(M), .NNZ(NNZ), .HB(HB)) dut(
         .clk(clk), .rst_n(rst_n), .start(start),
@@ -58,15 +56,25 @@ module GFOLD_FPGA (
         .SRAM_CE_N(SRAM_CE_N), .SRAM_OE_N(SRAM_OE_N), .SRAM_WE_N(SRAM_WE_N),
         .SRAM_UB_N(SRAM_UB_N), .SRAM_LB_N(SRAM_LB_N));
 
-    // ---- main RAM (internal M9K, compressed layout 59299 words) ----
-    reg [63:0] smem [0:59298];
-    // synchronous read (needed for Quartus to infer M9K; comb read = 276003)
+    // ---- main RAM (internal M9K, packed layout 47569 words: CB packed after VPR) ----
+    // NOTE: must be a pure synchronous read (no combinational read anywhere, e.g.
+    // gf_display) or Quartus fails to infer M9K and explodes into 276003 registers
+    // (Error 276003). The mass display value is captured below from ram_wdata.
+    reg [63:0] smem [0:47568];
     reg [63:0] ram_rdata;
     always @(posedge clk) ram_rdata <= smem[ram_addr];
     always @(posedge clk) if (ram_we) smem[ram_addr] <= ram_wdata;
 
-    // ---- KKT RAM (sync read for M9K inference) ----
-    reg [63:0] kmem [0:32767];
+    // mass display value: v[1099] (log final_mass) lives at address 1099 (V_BASE=0);
+    // capture it when drs_iter writes it, avoiding a combinational read of smem.
+    reg [63:0] disp_mass;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)                    disp_mass <= 64'd0;
+        else if (ram_we && ram_addr == 17'd1099) disp_mass <= ram_wdata;
+    end
+
+    // ---- KKT RAM (sync read for M9K inference); kkt_solve max addr = 4*M-1 = 8427 ----
+    reg [63:0] kmem [0:8427];
     reg [63:0] kkt_rdata;
     always @(posedge clk) kkt_rdata <= kmem[kkt_addr];
     always @(posedge clk) if (kkt_we) kmem[kkt_addr] <= kkt_wdata;
@@ -101,7 +109,7 @@ module GFOLD_FPGA (
     // ---- LCD status display ----
     wire [7:0] lcd_cmd_data; wire lcd_cmd_valid, lcd_is_data, lcd_busy;
     gf_display u_disp(.clk(clk), .rst_n(rst_n), .iter(iter_cnt),
-        .scale(scale_r), .x1099(smem[1099]),
+        .scale(scale_r), .x1099(disp_mass),
         .cmd_data(lcd_cmd_data), .cmd_valid(lcd_cmd_valid), .is_data(lcd_is_data), .busy(lcd_busy));
     lcd_driver u_lcd(.clk(clk), .rst_n(rst_n),
         .cmd_data(lcd_cmd_data), .cmd_valid(lcd_cmd_valid), .is_data(lcd_is_data), .busy(lcd_busy),

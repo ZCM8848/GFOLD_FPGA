@@ -63,9 +63,7 @@ set_global_assignment -name VERILOG_FILE ../rtl/fp64_rsqrt.v
 set_global_assignment -name VERILOG_FILE ../rtl/fp64_cmp.v
 set_global_assignment -name VERILOG_FILE ../rtl/proj_soc.v
 set_global_assignment -name VERILOG_FILE ../rtl/root_plus.v
-set_global_assignment -name VERILOG_FILE ../rtl/aa_gram.v
 set_global_assignment -name VERILOG_FILE ../rtl/chol10.v
-set_global_assignment -name VERILOG_FILE ../rtl/anderson.v
 set_global_assignment -name VERILOG_FILE ../rtl/s_build.v
 set_global_assignment -name VERILOG_FILE ../rtl/spmv_fp64.v
 set_global_assignment -name VERILOG_FILE ../rtl/banded_ldl_fp64_rb.v
@@ -330,6 +328,8 @@ set_global_assignment -name VERILOG_FILE ../rtl/gf_display.v
 set_global_assignment -name VERILOG_FILE ../rtl/lcd_driver.v
 set_global_assignment -name VERILOG_FILE ../rtl/num_7seg.v
 set_global_assignment -name VERILOG_FILE ../rtl/key_debounce.v
+
+set_global_assignment -name NUM_PARALLEL_PROCESSORS 16
 
 set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -section_id Top
 set_global_assignment -name PARTITION_FITTER_PRESERVATION_LEVEL PLACEMENT_AND_ROUTING -section_id Top

@@ -66,7 +66,7 @@ module drs_iter #(
     localparam G_BASE  = 4 * L;
     localparam DR_BASE = 4 * L + LM1;
     localparam VPR_BASE= 5 * L + LM1;      // v_prev
-    localparam CB_BASE = 6 * L + 2 * LM1 + L;      // c[0..n) + (-b)[n..n+m) for g recompute
+    localparam CB_BASE = 6 * L + LM1;      // c[0..n) + (-b)[n..n+m) for g recompute (packed after VPR)
     localparam BAND_BASE = CB_BASE + LM1;          // s_build band output (19800 words)
     localparam DY_BASE = BAND_BASE + (HB + 1) * N; // D_y for s_build (M words)
     localparam ZMASK_BASE = DY_BASE;  // boot zmask data shares DY area (loaded to reg bits at reset)
