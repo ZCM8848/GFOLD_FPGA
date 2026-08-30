@@ -119,7 +119,8 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
  S_SCLD1b=188, S_SCLP2b=189,
  S_SCLB0=190, S_SCLB1=191, S_SCLB2=192, S_SCLB3=193, S_SCLB4=194,
  S_SCLB5=195, S_SCLB6=196, S_SCLB7=197, S_SCLB8=198, S_SCLB9=199,
- S_SX0A=200, S_SX0B=201,
+  S_SX0A=200, S_SX0B=201,
+  S_SCLB_LOGW=202, S_SCLB_EXPW=203,
     S_W1=210, S_W2=211, S_W3=212, S_W4=213, S_W5=214, S_W6=215, S_W7=216, S_W8=217,
     S_W9=218, S_W10=219, S_W11=220, S_W12=221, S_W13=222, S_W14=223, S_W15=224, S_W16=225,
     S_W17=226, S_W18=227, S_W19=228, S_W20=229, S_W21=230, S_W22=231, S_W23=232, S_W24=233,
@@ -315,14 +316,16 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
  reg signed [15:0] n_log_r, last_scale_iter;
  reg [63:0] aty_i, c_i, ax_i, s_i, nb_i;
  reg [63:0] saty_pf, sax_pf;
- wire [63:0] log_relp, log_reld, exp_arg, exp_out, newscale_mul;
- fp64_log ulogp(rel_pri, log_relp);      // log(rel_pri)   (combinational)
- fp64_log ulogd(rel_dual, log_reld);     // log(rel_dual)
- wire [63:0] n_log_dbl;
- i2d ui2d(n_log_r[10:0], n_log_dbl);     // n_log -> double
- assign exp_arg = div_o;                 // exp arg = sum_log/(2*n_log) from the trigger div
- fp64_exp  uexp(exp_arg, exp_out);       // exp(sum_log/(2n))
- fp64_mul unm(scale_cur, exp_out, newscale_mul);   // scale * exp(...)
+    wire [63:0] log_relp, log_reld, exp_out;
+    wire [63:0] newscale_mul;
+    reg  logp_start, logd_start, exp_start;
+    wire logp_done, logd_done, exp_done;
+    fp64_log ulogp(clk, logp_start, rel_pri, logp_done, log_relp);
+    fp64_log ulogd(clk, logd_start, rel_dual, logd_done, log_reld);
+    wire [63:0] n_log_dbl;
+    i2d ui2d(n_log_r[10:0], n_log_dbl);     // n_log -> double
+    fp64_exp  uexp(clk, exp_start, div_o, exp_done, exp_out);   // exp(sum_log/(2n))
+    fp64_mul unm(scale_cur, exp_out, newscale_mul);   // scale * exp(...)
  wire pdc_own = (st == S_CONE || st == S_CONEW);
     wire sb_own = (st == S_SB || st == S_SBW);
     always @* begin
@@ -375,6 +378,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             denom_pri <= 0; denom_dual <= 0; rel_pri <= 0; rel_dual <= 0;
             sum_log_r <= 0; scale_cur <= 64'h3FF0000000000000; tau_scl <= 0; new_scale <= 0;  // scale_cur init 1.0
             n_log_r <= 0; last_scale_iter <= -16'd100; aty_i <= 0; c_i <= 0; ax_i <= 0; s_i <= 0; nb_i <= 0;
+            logp_start <= 0; logd_start <= 0; exp_start <= 0;
             zmask_bits <= 0;
         end else begin
             ks_start <= 0; ks_band_valid <= 0; ks_din_valid <= 0;
@@ -383,6 +387,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             div_start <= 0; sb_start <= 0;
             saty_start <= 0; saty_din_valid <= 0;
             sax_start <= 0; sax_din_valid <= 0;
+            logp_start <= 0; logd_start <= 0; exp_start <= 0;
             if (ks_band_valid && !ks_band_ready) ks_band_valid <= 0;   // level-held: clear after LDL sampled
             own_we <= 0;
             scale_valid_p <= scale_valid;
@@ -840,8 +845,11 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             end
             S_SCLR9: begin if (!div_done) st <= S_SCLR10; else st <= S_SCLR9; end
             S_SCLR10: begin
-                if (div_done) begin rel_dual <= div_o; st <= S_SCLB0; end
+                if (div_done) begin rel_dual <= div_o; logp_start <= 1; logd_start <= 1; st <= S_SCLB_LOGW; end
                 else st <= S_SCLR10;
+            end
+            S_SCLB_LOGW: begin
+                if (logp_done && logd_done) st <= S_SCLB0;
             end
             // ---- adaptive-scale decision: sum_log += log(rel_pri)-log(rel_dual) ----
             S_SCLB0: begin sa <= log_relp; sb <= log_reld; ssub <= 1; st <= S_SCLB1; end
@@ -862,9 +870,13 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             S_SCLB5: begin div_a <= sum_log_r; div_b <= po1; div_start <= 1; st <= S_SCLB6; end  // sum_log/(2n)
             S_SCLB6: begin if (!div_done) st <= S_SCLB7; else st <= S_SCLB6; end   // ARM
             S_SCLB7: begin
-                if (div_done) begin
+                if (div_done) begin exp_start <= 1; st <= S_SCLB_EXPW; end
+                else st <= S_SCLB7;
+            end
+            S_SCLB_EXPW: begin
+                if (exp_done) begin
                     cmp_a <= newscale_mul; cmp_b <= SC_MIN; st <= S_SCLB8;          // clamp low
-                end else st <= S_SCLB7;
+                end
             end
             S_SCLB8: begin
                 new_scale <= (!cmp_gt) ? SC_MIN : newscale_mul;

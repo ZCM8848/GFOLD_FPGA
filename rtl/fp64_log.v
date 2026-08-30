@@ -1,11 +1,17 @@
 `timescale 1ns/1ps
-// fp64_log: IEEE-754 FP64 natural log (combinational), for the adaptive-scale
-// decision logic (needs log(rel_pri) - log(rel_dual)). Accuracy ~1e-7 on
-// m in [1,2). Method: x = m*2^e (m in [1,2)), ln(x) = e*ln2 + ln(m), with
-// ln(m) via a deg-8 polynomial in t = m-1 (Chebyshev fit, ~9e-8). int->double
-// for the exponent e via i2d. Slow combinational chain (sim-only; pipeline for
-// synthesis if timing misses).
-module fp64_log(input wire [63:0] x, output wire [63:0] o);
+// fp64_log: IEEE-754 FP64 natural log (SEQUENTIAL, time-multiplexed), for the
+// adaptive-scale decision (needs log(rel_pri) - log(rel_dual)).
+// x = m*2^e (m in [1,2)), ln(x) = e*ln2 + ln(m), ln(m) via a deg-8 polynomial
+// in t = m-1 (Chebyshev fit, ~9e-8).
+//
+// Combinational version used 9 fp64_mul + 9 fp64_add (~30k ALUT). This version
+// shares ONE fp64_mul + ONE fp64_add across a ~21-cycle FSM (~3.5k ALUT); log is
+// only needed once every 25 iterations (scale decision).
+module fp64_log(input  wire        clk,
+                input  wire        start,
+                input  wire [63:0] x,
+                output reg         done,
+                output reg  [63:0] o);
     localparam LN2 = 64'h3FE62E42FEFA39EF;  // ln(2)
     // deg8 power coeffs of ln(1+t), t in [0,1] (c0..c8, ascending)
     localparam C0 = 64'h3E7833F29EA1D91B;
@@ -18,27 +24,54 @@ module fp64_log(input wire [63:0] x, output wire [63:0] o);
     localparam C7 = 64'h3FA19FB5B7BCD890;
     localparam C8 = 64'hBF78E28D5F586CC0;
 
-    wire [10:0] e = x[62:52] - 11'd1023;          // signed exponent
-    wire [63:0] m = {x[63], 11'd1023, x[51:0]};   // 1.0 + frac (normalized)
-    wire [63:0] t;                                 // m - 1.0
-    fp64_add ua_t(m, 64'h3FF0000000000000, 1'b1, t);
+    reg [63:0] ma, mb; wire [63:0] mpo;
+    fp64_mul um(ma, mb, mpo);
+    reg [63:0] aa, ab; reg asub; wire [63:0] apo;
+    fp64_add ua(aa, ab, asub, apo);
 
-    wire [63:0] e_dbl, e_ln2;
+    reg [63:0] xl, t, e_ln2, poly;
+    reg [4:0] st;
+
+    wire [10:0] e = xl[62:52] - 11'd1023;          // signed exponent
+    wire [63:0] m = {x[63], 11'd1023, x[51:0]};    // 1.0 + frac (normalized, from input x)
+    wire [63:0] e_dbl;
     i2d ui(e, e_dbl);
-    fp64_mul um_e(e_dbl, LN2, e_ln2);
 
-    // Horner: ((((C8*t+C7)*t+C6)*t+... +C1)*t + C0)
-    wire [63:0] a0,a1,a2,a3,a4,a5,a6,a7;
-    wire [63:0] p1,p2,p3,p4,p5,p6,p7,p8;
-    fp64_mul um0(t, C8, a0); fp64_add ua0(a0, C7, 1'b0, p1);
-    fp64_mul um1(p1, t, a1); fp64_add ua1(a1, C6, 1'b0, p2);
-    fp64_mul um2(p2, t, a2); fp64_add ua2(a2, C5, 1'b0, p3);
-    fp64_mul um3(p3, t, a3); fp64_add ua3(a3, C4, 1'b0, p4);
-    fp64_mul um4(p4, t, a4); fp64_add ua4(a4, C3, 1'b0, p5);
-    fp64_mul um5(p5, t, a5); fp64_add ua5(a5, C2, 1'b0, p6);
-    fp64_mul um6(p6, t, a6); fp64_add ua6(a6, C1, 1'b0, p7);
-    fp64_mul um7(p7, t, a7); fp64_add ua7(a7, C0, 1'b0, p8);
-    fp64_add ua8(e_ln2, p8, 1'b0, o);
+    localparam S_IDLE=0, S_T=1, S_ELN2=2, S_M0=3, S_A0=4, S_M1=5, S_A1=6,
+               S_M2=7, S_A2=8, S_M3=9, S_A3=10, S_M4=11, S_A4=12, S_M5=13, S_A5=14,
+               S_M6=15, S_A6=16, S_M7=17, S_A7=18, S_O=19, S_DONE=20;
+    always @(posedge clk) begin
+        if (start) begin
+            done <= 0; xl <= x; st <= S_T;
+            aa <= m; ab <= 64'h3FF0000000000000; asub <= 1'b1;   // t = m - 1.0
+        end else case (st)
+        S_IDLE: done <= 0;
+        S_T: begin t <= apo; st <= S_ELN2;
+            ma <= e_dbl; mb <= LN2; end                          // e_ln2 = e*ln2
+        S_ELN2: begin e_ln2 <= mpo; st <= S_M0;
+            ma <= t; mb <= C8; end                               // a = t*C8
+        S_M0: begin st <= S_A0; aa <= mpo; ab <= C7; asub <= 1'b0; end   // p = a+C7
+        S_A0: begin st <= S_M1; ma <= apo; mb <= t; end
+        S_M1: begin st <= S_A1; aa <= mpo; ab <= C6; asub <= 1'b0; end
+        S_A1: begin st <= S_M2; ma <= apo; mb <= t; end
+        S_M2: begin st <= S_A2; aa <= mpo; ab <= C5; asub <= 1'b0; end
+        S_A2: begin st <= S_M3; ma <= apo; mb <= t; end
+        S_M3: begin st <= S_A3; aa <= mpo; ab <= C4; asub <= 1'b0; end
+        S_A3: begin st <= S_M4; ma <= apo; mb <= t; end
+        S_M4: begin st <= S_A4; aa <= mpo; ab <= C3; asub <= 1'b0; end
+        S_A4: begin st <= S_M5; ma <= apo; mb <= t; end
+        S_M5: begin st <= S_A5; aa <= mpo; ab <= C2; asub <= 1'b0; end
+        S_A5: begin st <= S_M6; ma <= apo; mb <= t; end
+        S_M6: begin st <= S_A6; aa <= mpo; ab <= C1; asub <= 1'b0; end
+        S_A6: begin st <= S_M7; ma <= apo; mb <= t; end
+        S_M7: begin st <= S_A7; aa <= mpo; ab <= C0; asub <= 1'b0; end
+        S_A7: begin poly <= apo; st <= S_O;
+            aa <= e_ln2; ab <= apo; asub <= 1'b0; end             // o = e_ln2 + poly
+        S_O: begin st <= S_DONE; end
+        S_DONE: begin o <= apo; done <= 1; st <= S_IDLE; end
+        default: st <= S_IDLE;
+        endcase
+    end
 endmodule
 
 // signed 11-bit int -> FP64 double (combinational). e in [-1023,1023].
