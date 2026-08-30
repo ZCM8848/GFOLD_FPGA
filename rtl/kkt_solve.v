@@ -26,10 +26,8 @@
 module kkt_solve #(
     parameter N = 10, M = 20, NNZ = 41, HB = 4,
     parameter AA_BASE = 0,   // SRAM word offset for LDL arrays (past Anderson region)
+    parameter COO_BASE = 0,  // SRAM word base of the packed COO (shared by spmv1/spmv2)
     parameter RAM_AW = 14,
-    parameter AROW_FILE = "../data/kkt/small/Arow.hex",
-    parameter ACOL_FILE = "../data/kkt/small/Acol.hex",
-    parameter AVAL_FILE = "../data/kkt/small/Aval.hex",
     parameter RY_FILE   = "../data/kkt/small/r_y.hex",
     parameter DY_FILE   = "../data/kkt/small/Dy.hex"
 )(
@@ -62,6 +60,17 @@ module kkt_solve #(
     output wire  [63:0]   ldl_sram_wdata,
     input  wire          ldl_sram_busy,
     input  wire [63:0]   ldl_sram_rdata,
+    // ---- spmv external SRAM (COO read, arbiter-routed at drs_iter level) ----
+    output wire           sp1_sram_req, sp1_sram_we,
+    output wire  [17:0]   sp1_sram_waddr,
+    output wire  [63:0]   sp1_sram_wdata,
+    input  wire          sp1_sram_busy,
+    input  wire [63:0]   sp1_sram_rdata,
+    output wire           sp2_sram_req, sp2_sram_we,
+    output wire  [17:0]   sp2_sram_waddr,
+    output wire  [63:0]   sp2_sram_wdata,
+    input  wire          sp2_sram_busy,
+    input  wire [63:0]   sp2_sram_rdata,
     // ---- LDL band ready (back-pressure to the upstream band streamer) ----
     output wire           band_ready
 );
@@ -91,24 +100,26 @@ module kkt_solve #(
     wire        sp1_we;
     reg  sp1_start, sp1_din_valid;
     reg  [63:0] sp1_x_in;
-    spmv_fp64 #(.N(N), .M(M), .NNZ(NNZ), .transpose(1),
-                .AROW_FILE(AROW_FILE), .ACOL_FILE(ACOL_FILE), .AVAL_FILE(AVAL_FILE)) u_spmv1(
+    spmv_fp64 #(.N(N), .M(M), .NNZ(NNZ), .transpose(1), .COO_BASE(COO_BASE)) u_spmv1(
         .clk(clk), .rst_n(rst_n), .start(sp1_start),
         .x_in(sp1_x_in), .din_valid(sp1_din_valid),
         .ram_addr(sp1_addr), .ram_wdata(sp1_wdata), .ram_we(sp1_we),
-        .ram_rdata(ram_rdata), .out_out(), .o_valid(), .done(sp1_done_w));
+        .ram_rdata(ram_rdata), .out_out(), .o_valid(), .done(sp1_done_w),
+        .sram_req(sp1_sram_req), .sram_we(sp1_sram_we), .sram_waddr(sp1_sram_waddr),
+        .sram_wdata(sp1_sram_wdata), .sram_busy(sp1_sram_busy), .sram_rdata(sp1_sram_rdata));
 
     wire [12:0] sp2_addr;
     wire [63:0] sp2_wdata;
     wire        sp2_we;
     reg  sp2_start, sp2_din_valid;
     reg  [63:0] sp2_x_in;
-    spmv_fp64 #(.N(N), .M(M), .NNZ(NNZ), .transpose(0),
-                .AROW_FILE(AROW_FILE), .ACOL_FILE(ACOL_FILE), .AVAL_FILE(AVAL_FILE)) u_spmv2(
+    spmv_fp64 #(.N(N), .M(M), .NNZ(NNZ), .transpose(0), .COO_BASE(COO_BASE)) u_spmv2(
         .clk(clk), .rst_n(rst_n), .start(sp2_start),
         .x_in(sp2_x_in), .din_valid(sp2_din_valid),
         .ram_addr(sp2_addr), .ram_wdata(sp2_wdata), .ram_we(sp2_we),
-        .ram_rdata(ram_rdata), .out_out(), .o_valid(), .done(sp2_done_w));
+        .ram_rdata(ram_rdata), .out_out(), .o_valid(), .done(sp2_done_w),
+        .sram_req(sp2_sram_req), .sram_we(sp2_sram_we), .sram_waddr(sp2_sram_waddr),
+        .sram_wdata(sp2_sram_wdata), .sram_busy(sp2_sram_busy), .sram_rdata(sp2_sram_rdata));
 
     reg  ldl_start, ldl_band_valid, ldl_rhs_valid;
     reg  [63:0] ldl_band_in, ldl_rhs_in;
@@ -189,9 +200,11 @@ module kkt_solve #(
                 done <= 0;
                 if (start) begin
                     ldl_start <= 1; wp <= 0;
-                    // par_update: stream new r_y + D_y into the arrays first
+                    // par_update: stream new r_y + D_y into the arrays first.
+                    // band is pre-loaded into LDL's SRAM B[] by s_build (when
+                    // refactor=1), so it is no longer streamed in here.
                     if (par_update) st <= S_DYRY;
-                    else if (refactor) st <= S_BAND; else st <= S_VX;
+                    else st <= S_VX;
                 end
             end
             // ---- stream M r_y + M D_y words (scale change: refresh zy's D_y/r_y) ----
@@ -207,7 +220,7 @@ module kkt_solve #(
                     Dy_arr[wp] <= dy_in;
                     if (wp + 1 >= M) begin
                         wp <= 0;
-                        if (refactor) st <= S_BAND; else st <= S_VX;
+                        st <= S_VX;   // band pre-loaded into LDL SRAM; never streamed
                     end else wp <= wp + 1;
                 end
             end

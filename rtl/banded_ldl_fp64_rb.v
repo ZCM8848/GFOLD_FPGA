@@ -76,10 +76,6 @@ module banded_ldl_fp64_rb #(
     end
     wire sram_done = sram_done_r;
 
-    // ---- band/rhs ready: combinational (immediate, no 1-cycle residue) ----
-    assign band_ready = (st == S_BAND);
-    assign rhs_ready  = (st == S_RHS);
-
     // fp64 units (mul/add combinational, div sequential)
     wire [63:0] mul_a, mul_b, mul_o;
     fp64_mul um(mul_a, mul_b, mul_o);
@@ -94,10 +90,8 @@ module banded_ldl_fp64_rb #(
 
     // pipelined operand regs (sampled from SRAM reads)
     reg [63:0] mul_a_r, mul_b_r, add_a_b, rd_tmp;
-    wire [63:0] add_a_w = (st == S_UPDATE5) ? add_a_b : acc;
     assign mul_a = mul_a_r;
     assign mul_b = mul_b_r;
-    assign add_a = add_a_w;
     assign add_b = mul_o;
 
     localparam S_IDLE=0, S_BAND=1, S_BANDW=2, S_RHS=3, S_RHSW=4,
@@ -120,6 +114,11 @@ module banded_ldl_fp64_rb #(
     reg [15:0] k, i_off, j, i_, wp, zo;
     reg [63:0] d, t, acc;
     wire [15:0] r_cur = k + i_off;
+    // ---- moved after state/reg declarations (resolve forward references) ----
+    wire [63:0] add_a_w = (st == S_UPDATE5) ? add_a_b : acc;
+    assign add_a = add_a_w;
+    assign band_ready = (st == S_BAND);
+    assign rhs_ready  = (st == S_RHS);
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -136,8 +135,10 @@ module banded_ldl_fp64_rb #(
                 done <= 0;
                 if (start) begin
                     wp <= 0;
-                    if (refactor) st <= S_BAND;
-                    else begin k <= 0; st <= S_RHS; end
+                    // band is pre-loaded into SRAM B[] by s_build (refactor) or
+                    // reused from the last factorization (no refactor); it is no
+                    // longer streamed in — go straight to rhs.
+                    k <= 0; st <= S_RHS;
                 end
             end
             // ---- stream (HB+1)*N band words into B[] (1 word per ~6 cyc) ----

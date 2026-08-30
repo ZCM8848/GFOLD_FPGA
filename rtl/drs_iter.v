@@ -67,10 +67,12 @@ module drs_iter #(
     localparam DR_BASE = 4 * L + LM1;
     localparam VPR_BASE= 5 * L + LM1;      // v_prev
     localparam CB_BASE = 6 * L + LM1;      // c[0..n) + (-b)[n..n+m) for g recompute (packed after VPR)
-    localparam BAND_BASE = CB_BASE + LM1;          // s_build band output (19800 words)
+    localparam BAND_BASE = CB_BASE + LM1;          // spmv workspace (band moved to SRAM) (19800 words)
     localparam DY_BASE = BAND_BASE + (HB + 1) * N; // D_y for s_build (M words)
     localparam ZMASK_BASE = DY_BASE;  // boot zmask data shares DY area (loaded to reg bits at reset)
     localparam LMAX = (N > M) ? N : M;             // = M for the G-FOLD problem
+    localparam COO_BASE = 0;                       // packed COO in SRAM (word[2k]={Acol,Arow}, word[2k+1]=Aval)
+    localparam AA_BASE   = 4*L + 3*L*10;           // LDL array base in SRAM (109072); s_build writes band here
     // spmv workspace for the adaptive-scale residual: reused for A^Ty then Ax.
     // needs LMAX + LMAX words (spmv x@[0,LENX) + out@[LMAX,LMAX+LENO)).
     localparam NM_B = 64'h40A2C00000000000;  // max|b| = 2400.0 (reordered frame)
@@ -137,6 +139,10 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     wire        ks_o_valid, ks_done;
     wire ks_sram_req, ks_sram_we; wire [17:0] ks_sram_waddr; wire [63:0] ks_sram_wdata;
     wire ks_sram_busy; wire [63:0] ks_sram_rdata;
+    wire ks_sp1_sram_req, ks_sp1_sram_we; wire [17:0] ks_sp1_sram_waddr; wire [63:0] ks_sp1_sram_wdata;
+    wire ks_sp1_sram_busy; wire [63:0] ks_sp1_sram_rdata;
+    wire ks_sp2_sram_req, ks_sp2_sram_we; wire [17:0] ks_sp2_sram_waddr; wire [63:0] ks_sp2_sram_wdata;
+    wire ks_sp2_sram_busy; wire [63:0] ks_sp2_sram_rdata;
     wire ks_band_ready;
     reg band_valid_p;
     always @(posedge clk or negedge rst_n) begin
@@ -145,8 +151,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     end
     wire band_valid_rise = band_valid && !band_valid_p;   // one sample per tb word
     kkt_solve #(.N(N), .M(M), .NNZ(NNZ), .HB(HB),
-                .AA_BASE(4*L + 3*L*10),   // SRAM word offset past the Anderson region (109072)
-                .AROW_FILE(AROW_FILE), .ACOL_FILE(ACOL_FILE), .AVAL_FILE(AVAL_FILE),
+                .AA_BASE(AA_BASE), .COO_BASE(COO_BASE),
                 .RY_FILE("../data/kkt/full/r_y_r.hex"), .DY_FILE("../data/kkt/full/Dy_r.hex")) u_ks(
         .clk(clk), .rst_n(rst_n), .start(ks_start),
         .band_in(ks_band_in), .band_valid(ks_band_valid), .refactor(ks_refactor),
@@ -158,6 +163,10 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
         .z_out(ks_z_out), .o_valid(ks_o_valid), .done(ks_done),
         .ldl_sram_req(ks_sram_req), .ldl_sram_we(ks_sram_we), .ldl_sram_waddr(ks_sram_waddr),
         .ldl_sram_wdata(ks_sram_wdata), .ldl_sram_busy(ks_sram_busy), .ldl_sram_rdata(ks_sram_rdata),
+        .sp1_sram_req(ks_sp1_sram_req), .sp1_sram_we(ks_sp1_sram_we), .sp1_sram_waddr(ks_sp1_sram_waddr),
+        .sp1_sram_wdata(ks_sp1_sram_wdata), .sp1_sram_busy(ks_sp1_sram_busy), .sp1_sram_rdata(ks_sp1_sram_rdata),
+        .sp2_sram_req(ks_sp2_sram_req), .sp2_sram_we(ks_sp2_sram_we), .sp2_sram_waddr(ks_sp2_sram_waddr),
+        .sp2_sram_wdata(ks_sp2_sram_wdata), .sp2_sram_busy(ks_sp2_sram_busy), .sp2_sram_rdata(ks_sp2_sram_rdata),
         .band_ready(ks_band_ready));
 
     // ---- s_build (scale update: rebuild S band from D_y + A COO) ----
@@ -166,29 +175,38 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     wire [RAM_AW-1:0] sb_addr;
     wire [63:0] sb_wdata;
     wire sb_we;
+    wire sb_sram_req, sb_sram_we; wire [17:0] sb_sram_waddr; wire [63:0] sb_sram_wdata;
+    wire sb_sram_busy; wire [63:0] sb_sram_rdata;
     s_build #(.N(N), .M(M), .NNZ(NNZ), .HB(HB), .MAXROW(6), .RAM_AW(RAM_AW),
-              .BAND_OFFSET(BAND_BASE), .DY_OFFSET(DY_BASE),
-              .AROW_FILE(AROW_FILE), .ACOL_FILE(ACOL_FILE), .AVAL_FILE(AVAL_FILE)) u_sb(
+              .DY_OFFSET(DY_BASE), .COO_BASE(COO_BASE), .BAND_SRAM_BASE(AA_BASE)) u_sb(
         .clk(clk), .rst_n(rst_n), .start(sb_start),
         .ram_addr(sb_addr), .ram_wdata(sb_wdata), .ram_we(sb_we), .ram_rdata(ram_rdata),
+        .sram_req(sb_sram_req), .sram_we(sb_sram_we), .sram_waddr(sb_sram_waddr),
+        .sram_wdata(sb_sram_wdata), .sram_busy(sb_sram_busy), .sram_rdata(sb_sram_rdata),
         .done(sb_done));
 
     // ---- spmv for adaptive-scale residual: A^T y (transpose=1) then A x
     //      (transpose=0), both reusing BAND_BASE workspace (band idle outside scale rebuild) (sequential) ----
     reg  saty_start, saty_din_valid; reg [63:0] saty_x_in;
     wire [12:0] saty_addr; wire [63:0] saty_wdata; wire saty_we, saty_done;   // 13-bit: spmv ram_addr width
-    spmv_fp64 #(.N(N), .M(M), .NNZ(NNZ), .transpose(1),
-                .AROW_FILE(AROW_FILE), .ACOL_FILE(ACOL_FILE), .AVAL_FILE(AVAL_FILE)) u_saty(
+    wire saty_sram_req, saty_sram_we; wire [17:0] saty_sram_waddr; wire [63:0] saty_sram_wdata;
+    wire saty_sram_busy; wire [63:0] saty_sram_rdata;
+    spmv_fp64 #(.N(N), .M(M), .NNZ(NNZ), .transpose(1), .COO_BASE(COO_BASE)) u_saty(
         .clk(clk), .rst_n(rst_n), .start(saty_start), .x_in(saty_x_in), .din_valid(saty_din_valid),
         .ram_addr(saty_addr), .ram_wdata(saty_wdata), .ram_we(saty_we), .ram_rdata(ram_rdata),
-        .out_out(), .o_valid(), .done(saty_done));
+        .out_out(), .o_valid(), .done(saty_done),
+        .sram_req(saty_sram_req), .sram_we(saty_sram_we), .sram_waddr(saty_sram_waddr),
+        .sram_wdata(saty_sram_wdata), .sram_busy(saty_sram_busy), .sram_rdata(saty_sram_rdata));
     reg  sax_start, sax_din_valid; reg [63:0] sax_x_in;
     wire [12:0] sax_addr; wire [63:0] sax_wdata; wire sax_we, sax_done;   // 13-bit: spmv ram_addr width
-    spmv_fp64 #(.N(N), .M(M), .NNZ(NNZ), .transpose(0),
-                .AROW_FILE(AROW_FILE), .ACOL_FILE(ACOL_FILE), .AVAL_FILE(AVAL_FILE)) u_sax(
+    wire sax_sram_req, sax_sram_we; wire [17:0] sax_sram_waddr; wire [63:0] sax_sram_wdata;
+    wire sax_sram_busy; wire [63:0] sax_sram_rdata;
+    spmv_fp64 #(.N(N), .M(M), .NNZ(NNZ), .transpose(0), .COO_BASE(COO_BASE)) u_sax(
         .clk(clk), .rst_n(rst_n), .start(sax_start), .x_in(sax_x_in), .din_valid(sax_din_valid),
         .ram_addr(sax_addr), .ram_wdata(sax_wdata), .ram_we(sax_we), .ram_rdata(ram_rdata),
-        .out_out(), .o_valid(), .done(sax_done));
+        .out_out(), .o_valid(), .done(sax_done),
+        .sram_req(sax_sram_req), .sram_we(sax_sram_we), .sram_waddr(sax_sram_waddr),
+        .sram_wdata(sax_sram_wdata), .sram_busy(sax_sram_busy), .sram_rdata(sax_sram_rdata));
 
     reg  rp_start, rp_dv;
     reg  [63:0] rp_r, rp_g, rp_p, rp_mu, rp_eta;
@@ -208,15 +226,35 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
         .addr(pdc_addr), .wdata(pdc_wdata), .we(pdc_we), .rdata(pdc_rdata),
         .done(pdc_done));
 
-    // ---- external SRAM (LDL single user -> sram64_ctrl) ----
+    // ---- external SRAM: 6-user arbiter (all serial -> priority mux) ----
     wire sram_req, sram_we; wire [17:0] sram_waddr; wire [63:0] sram_wdata;
     wire sram_busy; wire [63:0] sram_rdata;
-    assign sram_req   = ks_sram_req;
-    assign sram_we    = ks_sram_we;
-    assign sram_waddr = ks_sram_waddr;
-    assign sram_wdata = ks_sram_wdata;
-    assign ks_sram_busy  = sram_busy;
-    assign ks_sram_rdata = sram_rdata;
+    wire g_ldl = ks_sram_req;
+    wire g_sp1 = ks_sp1_sram_req && !g_ldl;
+    wire g_sp2 = ks_sp2_sram_req && !g_ldl && !g_sp1;
+    wire g_sb  = sb_sram_req    && !g_ldl && !g_sp1 && !g_sp2;
+    wire g_saty= saty_sram_req  && !g_ldl && !g_sp1 && !g_sp2 && !g_sb;
+    wire g_sax = sax_sram_req   && !g_ldl && !g_sp1 && !g_sp2 && !g_sb && !g_saty;
+    assign sram_req = g_ldl | g_sp1 | g_sp2 | g_sb | g_saty | g_sax;
+    reg sram_we_m; reg [17:0] sram_waddr_m; reg [63:0] sram_wdata_m;
+    always @(*) begin
+        if (g_ldl) begin sram_we_m = ks_sram_we; sram_waddr_m = ks_sram_waddr; sram_wdata_m = ks_sram_wdata; end
+        else if (g_sp1) begin sram_we_m = ks_sp1_sram_we; sram_waddr_m = ks_sp1_sram_waddr; sram_wdata_m = ks_sp1_sram_wdata; end
+        else if (g_sp2) begin sram_we_m = ks_sp2_sram_we; sram_waddr_m = ks_sp2_sram_waddr; sram_wdata_m = ks_sp2_sram_wdata; end
+        else if (g_sb) begin sram_we_m = sb_sram_we; sram_waddr_m = sb_sram_waddr; sram_wdata_m = sb_sram_wdata; end
+        else if (g_saty) begin sram_we_m = saty_sram_we; sram_waddr_m = saty_sram_waddr; sram_wdata_m = saty_sram_wdata; end
+        else begin sram_we_m = sax_sram_we; sram_waddr_m = sax_sram_waddr; sram_wdata_m = sax_sram_wdata; end
+    end
+    assign sram_we = sram_we_m;
+    assign sram_waddr = sram_waddr_m;
+    assign sram_wdata = sram_wdata_m;
+    // busy/rdata broadcast: only the active user issues req and reads rdata
+    assign ks_sram_busy     = sram_busy; assign ks_sram_rdata     = sram_rdata;
+    assign ks_sp1_sram_busy = sram_busy; assign ks_sp1_sram_rdata = sram_rdata;
+    assign ks_sp2_sram_busy = sram_busy; assign ks_sp2_sram_rdata = sram_rdata;
+    assign sb_sram_busy     = sram_busy; assign sb_sram_rdata     = sram_rdata;
+    assign saty_sram_busy   = sram_busy; assign saty_sram_rdata   = sram_rdata;
+    assign sax_sram_busy    = sram_busy; assign sax_sram_rdata    = sram_rdata;
     assign band_ready = (st == S_KSBAND) && ks_band_ready;
     sram64_ctrl #(.AW(18)) u_sram(.clk(clk), .rst_n(rst_n), .req(sram_req), .we(sram_we),
         .waddr(sram_waddr), .wdata(sram_wdata), .busy(sram_busy), .rdata(sram_rdata),
@@ -421,7 +459,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             // ============ KKT solve ============
             S_KSSTART: begin
                 ks_start <= 1; i <= 0;
-                if (refactor) st <= S_KSBAND; else st <= S_KSVX;
+                st <= S_KSVX;   // band pre-loaded into LDL SRAM (refactor) or reused
             end
             S_KSBAND: begin
                 if (band_valid_rise && ks_band_ready && !ks_band_valid) begin
@@ -627,7 +665,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             end
             S_GKSDY0: begin
                 ks_dy_in <= ram_rdata; ks_dy_valid <= 1;
-                if (i + 1 >= M) begin i <= 0; own_addr <= BAND_BASE; st <= S_W2; end
+                if (i + 1 >= M) begin i <= 0; own_addr <= CB_BASE; st <= S_W3; end  // band pre-loaded; skip S_GKSB
                 else begin i <= i + 1; own_addr <= DY_BASE + i + 1; st <= S_W64; end
             end
             S_GKSB: begin
