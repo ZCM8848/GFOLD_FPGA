@@ -46,23 +46,32 @@ module proj_soc #(parameter DIM = 4) (
     fp64_cmp uc(ca, cb, , c_le, , , );
 
     reg [63:0] ratio, lam, nx, acc, t;
+    reg [63:0] vsq3_r, s12_r;   // pipelined sum-of-squares (meet 50MHz)
 
-    localparam S0=0, S_LATCH=1, S_RSQ=2, S_RSQW=3, S_NX=4, S_NXW=5, S_CMP=6,
-               S_CMP2=7, S_LAM=8, S_LAMW=9, S_RAT=10, S_RATW=11, S_OUTA=12, S_OUTB=13, S_DONE=14;
-    reg [3:0] st;
+    localparam S0=0, S_SQ2=1, S_SQ3=2, S_LATCH=3, S_RSQ=4, S_RSQW=5, S_NX=6, S_NXW=7, S_CMP=8,
+               S_CMP2=9, S_LAM=10, S_LAMW=11, S_RAT=12, S_RATW=13, S_OUTA=14, S_OUTB=15, S_DONE=16;
+    reg [4:0] st;
     reg [1:0] branch;   // 0=inside(v), 1=outside(0), 2=project
     reg [3:0] j;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             st <= S0; done <= 0; rr_start <= 0; ssub <= 0; branch <= 0; j <= 0;
+            vsq3_r <= 0; s12_r <= 0;
         end else begin
             rr_start <= 0; ssub <= 0;
             case (st)
             S0: begin
                 done <= 0;
-                if (start) begin acc <= nx2; t <= ve[0]; st <= S_LATCH; end
+                if (start) begin
+                    sa <= vsq[1]; sb <= vsq[2]; ssub <= 1'b0;   // add: vsq1+vsq2
+                    vsq3_r <= vsq[3]; t <= ve[0]; st <= S_SQ2;
+                end
             end
+            S_SQ2: begin
+                s12_r <= so; sa <= so; sb <= vsq3_r; ssub <= 1'b0; st <= S_SQ3;   // add: (vsq1+vsq2)+vsq3
+            end
+            S_SQ3: begin acc <= so; st <= S_LATCH; end
             S_LATCH: begin r_acc <= acc; rr_start <= 1; st <= S_RSQ; end
             S_RSQ: st <= S_RSQW;
             S_RSQW: if (rr_done) st <= S_NX;

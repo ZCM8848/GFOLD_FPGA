@@ -136,24 +136,24 @@ module kkt_solve #(
     assign band_ready = ldl_band_ready_w;   // back-pressure to the band streamer
 
     // ---- own FP64 arithmetic (combinational units, spmv pattern) ----
-    // rhs_x = rho_x*vx - A^T vy  (all combinational from regs vx_i/atvy_i)
-    reg [63:0] vx_i, atvy_i;
+    // rhs_x = rho_x*vx - A^T vy  (pipelined: 1 fp64 op per cycle)
+    reg [63:0] vx_i, atvy_i, po_rhs_r;
     wire [63:0] po_rhs, so_rhs;
     fp64_mul um_rhs(vx_i, RHO_X, po_rhs);
-    fp64_add ua_rhs(po_rhs, atvy_i, 1'b1, so_rhs);
-    // zy = Dy * (az + r_y*vy)    (all combinational from regs az_r/vy_r/ry_reg/dy_reg)
-    reg [63:0] az_r, vy_r, ry_reg, dy_reg;
+    fp64_add ua_rhs(po_rhs_r, atvy_i, 1'b1, so_rhs);
+    // zy = Dy * (az + r_y*vy)    (pipelined: 1 fp64 op per cycle to meet 50MHz)
+    reg [63:0] az_r, vy_r, ry_reg, dy_reg, zy1_r, zy2_r;
     wire [63:0] po_zy1, so_zy1, po_zy2;
-    fp64_mul um_zy1(ry_reg, vy_r, po_zy1);
-    fp64_add ua_zy1(az_r, po_zy1, 1'b0, so_zy1);
-    fp64_mul um_zy2(dy_reg, so_zy1, po_zy2);
+    fp64_mul um_zy1(ry_reg, vy_r, po_zy1);        // r_y*vy        (cycle 1)
+    fp64_add ua_zy1(az_r, zy1_r, 1'b0, so_zy1);   // az + r_y*vy   (cycle 2)
+    fp64_mul um_zy2(dy_reg, zy2_r, po_zy2);       // Dy*(az+r_y*vy)(cycle 3)
 
     // ---- RAM port mux: spmv1 (BASE1=0) | spmv2 (BASE2=2*LMAX) | own ----
     localparam S_IDLE=0, S_BAND=1, S_VX=2, S_VXW=3, S_VY=4,
-               S_SP1WAIT=5, S_RHS0=6, S_RHS1=7, S_RHS1R=27, S_RHS2=8, S_RHS2R=28, S_RHS3=9,
+               S_SP1WAIT=5, S_RHS0=6, S_RHS1=7, S_RHS1R=27, S_RHS2=8, S_RHS2R=28, S_RHS3=9, S_RHS3b=34,
                S_ZCAP=10, S_ZCAPDONE=11,
                S_SP2START=12, S_SP2FEED=13, S_SP2WAIT=14,
-               S_ZY0=15, S_ZY1=16, S_ZY1R=29, S_ZY2=17, S_ZY2R=30, S_ZY3=18, S_ZY4=19,
+                S_ZY0=15, S_ZY1=16, S_ZY1R=29, S_ZY2=17, S_ZY2R=30, S_ZY3=18, S_ZY3b=33, S_ZY4=19,
                S_ZOUT0=20, S_ZOUT1=21, S_ZOUT1R=31, S_ZYOUT0=22, S_ZYOUT1=23, S_ZYOUT1R=32, S_DONE=24,
                S_DYRY=25, S_DYDY=26;
     reg [5:0] st;
@@ -189,7 +189,7 @@ module kkt_solve #(
             ldl_rhs_valid <= 0; ldl_rhs_in <= 0;
             z_out <= 0; wp <= 0; i <= 0; r <= 0; zo <= 0;
             vx_i <= 0; atvy_i <= 0; az_r <= 0; vy_r <= 0;
-            ry_reg <= 0; dy_reg <= 0;
+            ry_reg <= 0; dy_reg <= 0; zy1_r <= 0; zy2_r <= 0; po_rhs_r <= 0;
         end else begin
             o_valid <= 0; own_we <= 0;
             sp1_din_valid <= 0; sp2_din_valid <= 0;
@@ -275,9 +275,10 @@ module kkt_solve #(
             S_RHS1R: begin vx_i <= ram_rdata; own_addr <= AD_ATVY + i; st <= S_RHS2; end
             S_RHS2: begin st <= S_RHS2R; end   // sync-read wait: kmem rdata for AD_ATVY+i
             S_RHS2R: begin atvy_i <= ram_rdata; st <= S_RHS3; end
-            S_RHS3: begin
+            S_RHS3: begin po_rhs_r <= po_rhs; st <= S_RHS3b; end   // latch rho_x*vx
+            S_RHS3b: begin
                 if (ldl_rhs_ready_w) begin
-                    ldl_rhs_in <= so_rhs; ldl_rhs_valid <= 1;
+                    ldl_rhs_in <= so_rhs; ldl_rhs_valid <= 1;   // rho_x*vx - A^Tvy
                     if (i + 1 >= N) begin zo <= 0; st <= S_ZCAP; end
                     else begin i <= i + 1; st <= S_RHS0; end
                 end
@@ -315,11 +316,10 @@ module kkt_solve #(
             S_ZY1R: begin az_r <= ram_rdata; own_addr <= r; st <= S_ZY2; end
             S_ZY2: begin st <= S_ZY2R; end   // sync-read wait: kmem rdata for r
             S_ZY2R: begin vy_r <= ram_rdata; st <= S_ZY3; end
-            S_ZY3: begin
-                own_addr <= AD_AZ + r; own_wdata <= po_zy2; own_we <= 1;
-                st <= S_ZY4;
-            end
+            S_ZY3: begin zy1_r <= po_zy1; st <= S_ZY3b; end      // latch r_y*vy
+            S_ZY3b: begin zy2_r <= so_zy1; st <= S_ZY4; end      // latch az + r_y*vy
             S_ZY4: begin
+                own_addr <= AD_AZ + r; own_wdata <= po_zy2; own_we <= 1;   // Dy*(az+r_y*vy)
                 if (r + 1 >= M) begin i <= 0; st <= S_ZOUT0; end
                 else begin r <= r + 1; st <= S_ZY0; end
             end

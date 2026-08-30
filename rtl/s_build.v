@@ -73,14 +73,14 @@ module s_build #(
     reg [15:0] kk, wp, cur_row, pa_col, dc_r;
     reg [63:0] rowcol;   // SRAM word {Acol[31:16], Arow[15:0]}
     reg [3:0] nrow, pa, pb;
-    reg [63:0] dy_row, band_r, acc_r, t1_r;
+    reg [63:0] dy_row, band_r, acc_r, t1_r, po_m2_r;
     reg last_row_flag;
 
     // ---- FP64 units (combinational) ----
     wire [63:0] po_m1, po_m2, so_acc;
     fp64_mul um1(vals[pa], vals[pb], po_m1);
     fp64_mul um2(t1_r, dy_row, po_m2);
-    fp64_add uacc(band_r, po_m2, 1'b0, so_acc);
+    fp64_add uacc(band_r, po_m2_r, 1'b0, so_acc);
     wire [15:0] c_lo_w = (cols[pa] < cols[pb]) ? cols[pa] : cols[pb];
     wire [15:0] c_hi_w = (cols[pa] < cols[pb]) ? cols[pb] : cols[pa];
     wire [15:0] dc_w = c_hi_w - c_lo_w;
@@ -90,7 +90,7 @@ module s_build #(
                S_LOAD=8, S_LOADW=9, S_LOADW2=10,
                S_ROWEND=11, S_ROWEND_W=12, S_ROWEND_DY=13,
                S_PAIR=14, S_PAIR_BAND=15, S_PAIR_BAND_W=16,
-               S_PAIR_M2ACC=17, S_PAIR_W=18, S_PAIR_WW=19,
+                S_PAIR_M2ACC=17, S_PAIR_M2ACCr=24, S_PAIR_W=18, S_PAIR_WW=19,
                S_PAIRADV=20, S_ROWDONE=21, S_NEXTROW=22, S_DONE=23;
     reg [4:0] st;
 
@@ -101,7 +101,7 @@ module s_build #(
             sram_start <= 0; sram_we <= 0; sram_waddr <= 0; sram_wdata <= 0;
             kk <= 0; wp <= 0; cur_row <= 0; pa_col <= 0; dc_r <= 0; rowcol <= 0;
             nrow <= 0; pa <= 0; pb <= 0;
-            dy_row <= 0; band_r <= 0; acc_r <= 0; t1_r <= 0;
+            dy_row <= 0; band_r <= 0; acc_r <= 0; t1_r <= 0; po_m2_r <= 0;
             last_row_flag <= 0;
         end else begin
             ram_we <= 0; sram_start <= 0;
@@ -195,7 +195,8 @@ module s_build #(
             S_PAIR_BAND_W: begin
                 if (sram_done) begin band_r <= sram_rdata; t1_r <= po_m1; st <= S_PAIR_M2ACC; end
             end
-            S_PAIR_M2ACC: begin acc_r <= so_acc; st <= S_PAIR_W; end
+            S_PAIR_M2ACC: begin po_m2_r <= po_m2; st <= S_PAIR_M2ACCr; end
+            S_PAIR_M2ACCr: begin acc_r <= so_acc; st <= S_PAIR_W; end
             S_PAIR_W: begin
                 sram_waddr <= BAND_SRAM_BASE + pa_col*(HB+1) + dc_r; sram_wdata <= acc_r; sram_we <= 1; sram_start <= 1;
                 st <= S_PAIR_WW;

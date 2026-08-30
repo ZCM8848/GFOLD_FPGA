@@ -89,25 +89,25 @@ module banded_ldl_fp64_rb #(
     fp64_div udiv(clk, div_start, div_a, div_b, div_done, div_o);
 
     // pipelined operand regs (sampled from SRAM reads)
-    reg [63:0] mul_a_r, mul_b_r, add_a_b, rd_tmp;
+    reg [63:0] mul_a_r, mul_b_r, add_a_b, rd_tmp, mul_o_r;
     assign mul_a = mul_a_r;
     assign mul_b = mul_b_r;
-    assign add_b = mul_o;
+    assign add_b = mul_o_r;   // one-cycle-latched mul result (meet 50MHz)
 
     localparam S_IDLE=0, S_BAND=1, S_BANDW=2, S_RHS=3, S_RHSW=4,
                S_SETUP0=5, S_SETUP1=6, S_SETUP2=7,
                S_TDIV_ST=8, S_TDIV_ST1=9, S_TDIV_ST2=10, S_TDIV_ARM=11, S_TDIV_W=12,
                S_UPDATE0=13, S_UPDATE1=14, S_UPDATE2=15, S_UPDATE3=16, S_UPDATE4=17,
-               S_UPDATE5=18, S_UPDATE6=19,
+               S_UPDATE4b=57, S_UPDATE5=18, S_UPDATE6=19,
                S_LCONV_ST=20, S_LCONV_ST1=21, S_LCONV_ST2=22, S_LCONV_ARM=23,
                S_LCONV_W=24, S_LCONV_W2=25,
                S_FWD_E=26, S_FWD_E1=27, S_FWD_E2=28,
-               S_FWD_L0=29, S_FWD_L1=30, S_FWD_L4=31, S_FWD_L3=32,
+               S_FWD_L0=29, S_FWD_L1=30, S_FWD_L4=31, S_FWD_L4b=58, S_FWD_L3=32,
                S_FWD_LW=33, S_FWD_L2=34, S_FWD_L5=35,
                S_DDIV_ST=36, S_DDIV_W=37, S_DDIV_W1=38, S_DDIV_W2=39,
                S_DDIV_ARM=40, S_DDIV_D=41, S_DDIV_DW=42,
                S_BACK_E=43, S_BACK_E1=44, S_BACK_E2=45,
-               S_BACK_L0=46, S_BACK_L1=47, S_BACK_L4=48, S_BACK_L3=49,
+               S_BACK_L0=46, S_BACK_L1=47, S_BACK_L4=48, S_BACK_L4b=59, S_BACK_L3=49,
                S_BACK_LX=50, S_BACK_LZ=51, S_BACK_L2=52, S_BACK_L5=53,
                S_ZOUT=54, S_ZOUTW=55, S_DONE=56;
     reg [5:0] st;
@@ -126,7 +126,7 @@ module banded_ldl_fp64_rb #(
             div_start <= 0; add_sub <= 1;
             k <= 0; i_off <= 0; j <= 0; i_ <= 0; wp <= 0; zo <= 0;
             acc <= 0; t <= 0; d <= 0; zx_out <= 0;
-            mul_a_r <= 0; mul_b_r <= 0; add_a_b <= 0; rd_tmp <= 0;
+            mul_a_r <= 0; mul_b_r <= 0; add_a_b <= 0; rd_tmp <= 0; mul_o_r <= 0;
             sram_start <= 0; sram_we <= 0; sram_waddr <= 0; sram_wdata <= 0;
         end else begin
             div_start <= 0; zx_valid <= 0;
@@ -219,7 +219,7 @@ module banded_ldl_fp64_rb #(
                 if (sram_done) st <= S_UPDATE4;
             end
             S_UPDATE4: begin
-                add_a_b <= sram_rdata; st <= S_UPDATE5;
+                add_a_b <= sram_rdata; mul_o_r <= mul_o; st <= S_UPDATE5;
             end
             S_UPDATE5: begin
                 add_sub <= 1;
@@ -291,8 +291,11 @@ module banded_ldl_fp64_rb #(
             S_FWD_L4: begin
                 sram_start <= 0;
                 if (sram_done) begin
-                    mul_b_r <= sram_rdata; st <= S_FWD_L3;
+                    mul_b_r <= sram_rdata; st <= S_FWD_L4b;
                 end
+            end
+            S_FWD_L4b: begin
+                mul_o_r <= mul_o; st <= S_FWD_L3;
             end
             S_FWD_L3: begin
                 add_sub <= 1;
@@ -380,8 +383,11 @@ module banded_ldl_fp64_rb #(
             S_BACK_L4: begin
                 sram_start <= 0;
                 if (sram_done) begin
-                    mul_b_r <= sram_rdata; st <= S_BACK_L3;
+                    mul_b_r <= sram_rdata; st <= S_BACK_L4b;
                 end
+            end
+            S_BACK_L4b: begin
+                mul_o_r <= mul_o; st <= S_BACK_L3;
             end
             S_BACK_L3: begin
                 add_sub <= 1;

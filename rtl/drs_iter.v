@@ -66,6 +66,7 @@ module drs_iter #(
     input  wire              FL_RY
 );
     localparam V_BASE  = 0;
+    localparam LMAX = (N > M) ? N : M;             // = M for the G-FOLD problem
     localparam UT_BASE = L;
     localparam U_BASE  = 2 * L;
     localparam RSK_BASE= 3 * L;
@@ -73,10 +74,9 @@ module drs_iter #(
     localparam DR_BASE = 4 * L + LM1;
     localparam VPR_BASE= 5 * L + LM1;      // v_prev
     localparam CB_BASE = 6 * L + LM1;      // c[0..n) + (-b)[n..n+m) for g recompute (packed after VPR)
-    localparam BAND_BASE = CB_BASE + LM1;          // spmv workspace (band moved to SRAM) (19800 words)
-    localparam DY_BASE = BAND_BASE + (HB + 1) * N; // D_y for s_build (M words)
+    localparam BAND_BASE = CB_BASE + LM1;          // spmv workspace (2*LMAX words; band moved to SRAM)
+    localparam DY_BASE = BAND_BASE + 2 * LMAX;     // D_y for s_build (M words)
     localparam ZMASK_BASE = DY_BASE;  // boot zmask data shares DY area (loaded to reg bits at reset)
-    localparam LMAX = (N > M) ? N : M;             // = M for the G-FOLD problem
     localparam COO_BASE = 0;                       // packed COO in SRAM (word[2k]={Acol,Arow}, word[2k+1]=Aval)
     localparam AA_BASE   = 4*L + 3*L*10;           // LDL array base in SRAM (109072); s_build writes band here
     // ---- Flash segment base (64-bit word addr; see gen_flash_image.py manifest) ----

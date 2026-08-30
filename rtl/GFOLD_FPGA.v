@@ -29,7 +29,9 @@ module GFOLD_FPGA (
 );
     localparam N = 1100, M = 2107, NNZ = 4783, HB = 17;
 
-    wire clk = CLOCK_50;
+    wire clk;
+    wire pll_locked;
+    pll30 u_pll(.areset(1'b0), .inclk0(CLOCK_50), .c0(clk), .locked(pll_locked));
 
     // ---- reset (KEY0 raw, async ok) + start (KEY1 debounced pulse) ----
     wire rst_n = KEY[0];   // KEY0 pressed = low = reset
@@ -51,11 +53,12 @@ module GFOLD_FPGA (
     wire [63:0] kkt_wdata;
     wire        kkt_we;
 
-    // ---- main RAM (internal M9K, packed layout 47569 words: CB packed after VPR) ----
+    // ---- main RAM (internal M9K, packed layout 31983 words: CB packed after
+    // VPR, spmv workspace 2*LMAX, D_y M) ----
     // NOTE: must be a pure synchronous read (no combinational read anywhere, e.g.
     // gf_display) or Quartus fails to infer M9K and explodes into 276003 registers
     // (Error 276003). The mass display value is captured below from ram_wdata.
-    reg [63:0] smem [0:47568];
+    reg [63:0] smem [0:31982];
     reg [63:0] ram_rdata;
     // ---- KKT RAM (sync read for M9K inference); kkt_solve max addr = 4*M-1 = 8427 ----
     reg [63:0] kmem [0:8427];
@@ -138,5 +141,5 @@ module GFOLD_FPGA (
 
     // ---- status LEDs ----
     assign LEDR = { done, started, 16'd0 };
-    assign LEDG = 9'd0;
+    assign LEDG = { 8'd0, pll_locked };
 endmodule
