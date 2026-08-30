@@ -1,9 +1,10 @@
 // ============================================================
 // GFOLD_FPGA — top-level for DE2-115 (EP4CE115F29C7)
-// drs_iter + internal main/KKT RAM + external SRAM (Anderson/LDL)
+// drs_iter + internal main/KKT RAM + external SRAM + CFI Flash
 // + LCD status display (ITER/SCALE/MASS) + 7-seg + KEY control.
-// KEY0 = reset (debounced), KEY1 = start (debounced edge).
-// Data not yet loaded (ISME/JTAG or ROM); runs from zero initial v.
+// KEY0 = reset, KEY1 = start (debounced edge).
+// Solver input (COO/c/nb/zmask/band/g) is burned into CFI Flash and loaded
+// by drs_iter's boot FSM at power-up (see gen_flash_image.py).
 // ============================================================
 `timescale 1ns/1ps
 module GFOLD_FPGA (
@@ -16,10 +17,15 @@ module GFOLD_FPGA (
     output wire        LCD_EN, LCD_RS, LCD_RW, LCD_ON,
     // ---- 7-seg displays ----
     output wire [6:0]  HEX0, HEX1, HEX2, HEX3, HEX4, HEX5, HEX6, HEX7,
-    // ---- 2MB async SRAM (IS61WV25616BLL: Anderson + LDL history) ----
+    // ---- 2MB async SRAM (IS61WV25616BLL: COO + LDL band/history) ----
     output wire [19:0] SRAM_ADDR,
     inout  wire [15:0] SRAM_DQ,
-    output wire        SRAM_CE_N, SRAM_OE_N, SRAM_WE_N, SRAM_UB_N, SRAM_LB_N
+    output wire        SRAM_CE_N, SRAM_OE_N, SRAM_WE_N, SRAM_UB_N, SRAM_LB_N,
+    // ---- 8MB CFI Flash (boot: solver input burned in) ----
+    output wire [22:0] FL_ADDR,
+    inout  wire [7:0]  FL_DQ,
+    output wire        FL_CE_N, FL_OE_N, FL_WE_N, FL_RESET_N, FL_WP_N,
+    input  wire        FL_RY
 );
     localparam N = 1100, M = 2107, NNZ = 4783, HB = 17;
 
@@ -45,6 +51,16 @@ module GFOLD_FPGA (
     wire [63:0] kkt_wdata;
     wire        kkt_we;
 
+    // ---- main RAM (internal M9K, packed layout 47569 words: CB packed after VPR) ----
+    // NOTE: must be a pure synchronous read (no combinational read anywhere, e.g.
+    // gf_display) or Quartus fails to infer M9K and explodes into 276003 registers
+    // (Error 276003). The mass display value is captured below from ram_wdata.
+    reg [63:0] smem [0:47568];
+    reg [63:0] ram_rdata;
+    // ---- KKT RAM (sync read for M9K inference); kkt_solve max addr = 4*M-1 = 8427 ----
+    reg [63:0] kmem [0:8427];
+    reg [63:0] kkt_rdata;
+
     drs_iter #(.N(N), .M(M), .NNZ(NNZ), .HB(HB)) dut(
         .clk(clk), .rst_n(rst_n), .start(start),
         .refactor(refactor), .band_in(band_in), .band_valid(band_valid), .iter(iter),
@@ -54,14 +70,11 @@ module GFOLD_FPGA (
         .done(done), .band_ready(band_ready),
         .SRAM_ADDR(SRAM_ADDR), .SRAM_DQ(SRAM_DQ),
         .SRAM_CE_N(SRAM_CE_N), .SRAM_OE_N(SRAM_OE_N), .SRAM_WE_N(SRAM_WE_N),
-        .SRAM_UB_N(SRAM_UB_N), .SRAM_LB_N(SRAM_LB_N));
+        .SRAM_UB_N(SRAM_UB_N), .SRAM_LB_N(SRAM_LB_N),
+        .FL_ADDR(FL_ADDR), .FL_DQ(FL_DQ), .FL_CE_N(FL_CE_N), .FL_OE_N(FL_OE_N),
+        .FL_WE_N(FL_WE_N), .FL_RESET_N(FL_RESET_N), .FL_WP_N(FL_WP_N), .FL_RY(FL_RY));
 
-    // ---- main RAM (internal M9K, packed layout 47569 words: CB packed after VPR) ----
-    // NOTE: must be a pure synchronous read (no combinational read anywhere, e.g.
-    // gf_display) or Quartus fails to infer M9K and explodes into 276003 registers
-    // (Error 276003). The mass display value is captured below from ram_wdata.
-    reg [63:0] smem [0:47568];
-    reg [63:0] ram_rdata;
+    // ---- main RAM read/write ----
     always @(posedge clk) ram_rdata <= smem[ram_addr];
     always @(posedge clk) if (ram_we) smem[ram_addr] <= ram_wdata;
 
@@ -73,9 +86,7 @@ module GFOLD_FPGA (
         else if (ram_we && ram_addr == 17'd1099) disp_mass <= ram_wdata;
     end
 
-    // ---- KKT RAM (sync read for M9K inference); kkt_solve max addr = 4*M-1 = 8427 ----
-    reg [63:0] kmem [0:8427];
-    reg [63:0] kkt_rdata;
+    // ---- KKT RAM read/write ----
     always @(posedge clk) kkt_rdata <= kmem[kkt_addr];
     always @(posedge clk) if (kkt_we) kmem[kkt_addr] <= kkt_wdata;
 

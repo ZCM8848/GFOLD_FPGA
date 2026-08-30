@@ -36,7 +36,8 @@ module tb_sbuild_sram;
 
     reg [63:0] coo_word [0:2*NNZ-1];
     reg [63:0] dy [0:M-1];
-    integer k;
+    reg [63:0] band_ref [0:32767];
+    integer k, nbad;
     reg watchdog = 0;
     always begin #(64'd100000000); if (!watchdog) begin $display("TIMEOUT st=%0d", dut.st); $finish; end end
 
@@ -50,12 +51,28 @@ module tb_sbuild_sram;
         end
         $readmemh("../data/kkt/full/Dy_r.hex", dy);
         for (k = 0; k < M; k = k + 1) smem[k] = dy[k];
+        $readmemh("../data/kkt/full/band_r.hex", band_ref);
         rst_n = 0; repeat (4) @(negedge clk); rst_n = 1;
         repeat (2) @(negedge clk);
         start = 1; @(negedge clk); start = 0;
         while (!done) @(posedge clk);
         watchdog = 1;
-        $display("SB DONE");
+        nbad = 0;
+        for (k = 0; k < (HB+1)*N; k = k + 1) begin
+            if ({sram_mem[4*(BAND_SRAM_BASE+k)+3], sram_mem[4*(BAND_SRAM_BASE+k)+2],
+                 sram_mem[4*(BAND_SRAM_BASE+k)+1], sram_mem[4*(BAND_SRAM_BASE+k)+0]} !== band_ref[k]) begin
+                if (nbad < 5) $display("  band[%0d]: got %h exp %h", k,
+                    {sram_mem[4*(BAND_SRAM_BASE+k)+3], sram_mem[4*(BAND_SRAM_BASE+k)+2],
+                     sram_mem[4*(BAND_SRAM_BASE+k)+1], sram_mem[4*(BAND_SRAM_BASE+k)+0]}, band_ref[k]);
+                nbad = nbad + 1;
+            end
+        end
+        $display("SB DONE band: bad=%0d/%0d", nbad, (HB+1)*N);
+        $write("SBAND:");
+        for (k = 0; k < (HB+1)*N; k = k + 1) $write(" %h",
+            {sram_mem[4*(BAND_SRAM_BASE+k)+3], sram_mem[4*(BAND_SRAM_BASE+k)+2],
+             sram_mem[4*(BAND_SRAM_BASE+k)+1], sram_mem[4*(BAND_SRAM_BASE+k)+0]});
+        $write("\n");
         $finish;
     end
 endmodule

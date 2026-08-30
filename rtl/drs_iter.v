@@ -57,7 +57,13 @@ module drs_iter #(
     // ---- external SRAM (sram64_ctrl; shared by Anderson + LDL via arbiter) ----
     output wire [19:0]       SRAM_ADDR,
     inout  wire [15:0]       SRAM_DQ,
-    output wire              SRAM_CE_N, SRAM_OE_N, SRAM_WE_N, SRAM_UB_N, SRAM_LB_N
+    output wire              SRAM_CE_N, SRAM_OE_N, SRAM_WE_N, SRAM_UB_N, SRAM_LB_N,
+    // ---- CFI Flash (boot: solver input burned in at power-up) ----
+    output wire [22:0]       FL_ADDR,
+    inout  wire [7:0]        FL_DQ,
+    output wire              FL_CE_N, FL_OE_N, FL_WE_N,
+    output wire              FL_RESET_N, FL_WP_N,
+    input  wire              FL_RY
 );
     localparam V_BASE  = 0;
     localparam UT_BASE = L;
@@ -73,10 +79,19 @@ module drs_iter #(
     localparam LMAX = (N > M) ? N : M;             // = M for the G-FOLD problem
     localparam COO_BASE = 0;                       // packed COO in SRAM (word[2k]={Acol,Arow}, word[2k+1]=Aval)
     localparam AA_BASE   = 4*L + 3*L*10;           // LDL array base in SRAM (109072); s_build writes band here
+    // ---- Flash segment base (64-bit word addr; see gen_flash_image.py manifest) ----
+    localparam FL_COO_W = 20'd0;                   // COO segment
+    localparam FL_C_W   = 20'd9566;                // c segment (0x255E)
+    localparam FL_NB_W  = 20'd10666;               // nb segment (0x29AA)
+    localparam FL_ZM_W  = 20'd12773;               // zmask segment (0x31E5)
+    localparam FL_BAND_W= 20'd14880;               // band segment (0x3A20)
+    localparam FL_G_W   = 20'd34680;               // g segment (0x8778)
     // spmv workspace for the adaptive-scale residual: reused for A^Ty then Ax.
     // needs LMAX + LMAX words (spmv x@[0,LENX) + out@[LMAX,LMAX+LENO)).
     localparam NM_B = 64'h40A2C00000000000;  // max|b| = 2400.0 (reordered frame)
     localparam NM_C = 64'h3FF0000000000000;  // max|c| = 1.0
+    localparam RHO_X = 64'h3EB0C6F7A0B5ED8D;  // 1e-6 (diag_r[:n])
+    localparam TAU_FACTOR = 64'h4024000000000000;  // 10.0 (diag_r[n+m])
     localparam LN10 = 64'h40026BB1BBB55516;  // ln(10) = 2.302585093
     localparam SC_MIN = 64'h3EB0C6F7A0B5ED8D;  // 1e-6
     localparam SC_MAX = 64'h412E848000000000;  // 1e6
@@ -126,7 +141,8 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     S_W17=226, S_W18=227, S_W19=228, S_W20=229, S_W21=230, S_W22=231, S_W23=232, S_W24=233,
     S_W25=234, S_W26=235, S_W27=236, S_W28=237, S_W29=238, S_W30=239, S_W31=240, S_W32=241,
     S_W33=242, S_W34=243, S_W35=244, S_W36=245, S_W37=246, S_W38=247, S_W39=248, S_W40=249,
-    S_W41=250, S_W42=251, S_W43=252, S_W44=253, S_W45=254, S_W46=255,S_W47=257,S_W48=258,S_W49=259,S_W50=260,S_W51=261,S_W52=262,S_W53=263,S_W54=264,S_W55=265,S_W56=266,S_W57=267,S_W58=268,S_W59=269,S_W60=270,S_W61=271,S_W62=272,S_W63=273,S_W64=274,S_W65=275,S_W66=276,S_W67=277,S_W68=278,S_W69=279,S_W70=280,S_W71=281,S_W72=282,S_W73=283,S_W74=284,S_W75=285,S_W76=286,S_W77=287,S_W78=288,S_W79=289,S_W80=290,S_W81=291,S_W82=292,S_W83=293,S_W84=294, S_W85=295, S_GKSBH=296;
+    S_W41=250, S_W42=251, S_W43=252, S_W44=253, S_W45=254, S_W46=255,S_W47=257,S_W48=258,S_W49=259,S_W50=260,S_W51=261,S_W52=262,S_W53=263,S_W54=264,S_W55=265,S_W56=266,S_W57=267,S_W58=268,S_W59=269,S_W60=270,S_W61=271,S_W62=272,S_W63=273,S_W64=274,S_W65=275,S_W66=276,S_W67=277,S_W68=278,S_W69=279,S_W70=280,S_W71=281,S_W72=282,S_W73=283,S_W74=284,S_W75=285,S_W76=286,S_W77=287,S_W78=288,S_W79=289,S_W80=290,S_W81=291,S_W82=292,S_W83=293,    S_W84=294, S_W85=295, S_GKSBH=296,
+    S_BOOT_WAIT=297, S_BOOT_F=298, S_BOOT_FW=299, S_BOOT_W=300, S_BOOT_WW=301, S_BOOT_V0=302, S_BOOT_DR=303;
     reg [8:0] st;   // 0..261 fits in 9 bits (sync-read waits S_W1..W46)
     // force refactor=1 during a scale-update g recompute (band comes from s_build)
     reg gks_active;
@@ -227,19 +243,28 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
         .addr(pdc_addr), .wdata(pdc_wdata), .we(pdc_we), .rdata(pdc_rdata),
         .done(pdc_done));
 
-    // ---- external SRAM: 6-user arbiter (all serial -> priority mux) ----
+    // ---- boot copy FSM regs (declared before the arbiter that uses them) ----
+    reg [2:0] boot_seg;        // 0=COO,1=c,2=nb,3=zmask
+    reg       boot_sram_req;   // boot write to SRAM (COO)
+    reg [17:0] boot_sram_waddr;
+    reg [63:0] boot_sram_wdata;
+    reg       booting;         // 1 while the boot g-recompute runs (alters S_GKSD exit)
+    reg       flash_req; reg [19:0] flash_waddr;
+    // ---- external SRAM: 7-user arbiter (boot + 6 runtime, all serial -> priority mux) ----
     wire sram_req, sram_we; wire [17:0] sram_waddr; wire [63:0] sram_wdata;
     wire sram_busy; wire [63:0] sram_rdata;
-    wire g_ldl = ks_sram_req;
-    wire g_sp1 = ks_sp1_sram_req && !g_ldl;
-    wire g_sp2 = ks_sp2_sram_req && !g_ldl && !g_sp1;
-    wire g_sb  = sb_sram_req    && !g_ldl && !g_sp1 && !g_sp2;
-    wire g_saty= saty_sram_req  && !g_ldl && !g_sp1 && !g_sp2 && !g_sb;
-    wire g_sax = sax_sram_req   && !g_ldl && !g_sp1 && !g_sp2 && !g_sb && !g_saty;
-    assign sram_req = g_ldl | g_sp1 | g_sp2 | g_sb | g_saty | g_sax;
+    wire g_boot= boot_sram_req;
+    wire g_ldl = ks_sram_req     && !g_boot;
+    wire g_sp1 = ks_sp1_sram_req && !g_boot && !g_ldl;
+    wire g_sp2 = ks_sp2_sram_req && !g_boot && !g_ldl && !g_sp1;
+    wire g_sb  = sb_sram_req     && !g_boot && !g_ldl && !g_sp1 && !g_sp2;
+    wire g_saty= saty_sram_req   && !g_boot && !g_ldl && !g_sp1 && !g_sp2 && !g_sb;
+    wire g_sax = sax_sram_req    && !g_boot && !g_ldl && !g_sp1 && !g_sp2 && !g_sb && !g_saty;
+    assign sram_req = g_boot | g_ldl | g_sp1 | g_sp2 | g_sb | g_saty | g_sax;
     reg sram_we_m; reg [17:0] sram_waddr_m; reg [63:0] sram_wdata_m;
     always @(*) begin
-        if (g_ldl) begin sram_we_m = ks_sram_we; sram_waddr_m = ks_sram_waddr; sram_wdata_m = ks_sram_wdata; end
+        if (g_boot) begin sram_we_m = 1'b1; sram_waddr_m = boot_sram_waddr; sram_wdata_m = boot_sram_wdata; end
+        else if (g_ldl) begin sram_we_m = ks_sram_we; sram_waddr_m = ks_sram_waddr; sram_wdata_m = ks_sram_wdata; end
         else if (g_sp1) begin sram_we_m = ks_sp1_sram_we; sram_waddr_m = ks_sp1_sram_waddr; sram_wdata_m = ks_sp1_sram_wdata; end
         else if (g_sp2) begin sram_we_m = ks_sp2_sram_we; sram_waddr_m = ks_sp2_sram_waddr; sram_wdata_m = ks_sp2_sram_wdata; end
         else if (g_sb) begin sram_we_m = sb_sram_we; sram_waddr_m = sb_sram_waddr; sram_wdata_m = sb_sram_wdata; end
@@ -262,6 +287,24 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
         .SRAM_ADDR(SRAM_ADDR), .SRAM_DQ(SRAM_DQ), .SRAM_CE_N(SRAM_CE_N),
         .SRAM_OE_N(SRAM_OE_N), .SRAM_WE_N(SRAM_WE_N), .SRAM_UB_N(SRAM_UB_N),
         .SRAM_LB_N(SRAM_LB_N));
+    // ---- CFI Flash (boot: solver input burned in at power-up) ----
+    wire flash_busy, flash_ready; wire [63:0] flash_rdata;
+    flash_ctrl #(.AW(20)) u_flash(.clk(clk), .rst_n(rst_n), .req(flash_req), .waddr(flash_waddr),
+        .busy(flash_busy), .ready(flash_ready), .rdata(flash_rdata),
+        .FL_ADDR(FL_ADDR), .FL_DQ(FL_DQ), .FL_CE_N(FL_CE_N), .FL_OE_N(FL_OE_N),
+        .FL_WE_N(FL_WE_N), .FL_RESET_N(FL_RESET_N), .FL_WP_N(FL_WP_N), .FL_RY(FL_RY));
+    // busy falling-edge detects for the boot copy loop
+    reg flash_busy_p, sram_busy_p;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin flash_busy_p <= 0; sram_busy_p <= 0; end
+        else begin flash_busy_p <= flash_busy; sram_busy_p <= sram_busy; end
+    end
+    wire [19:0] boot_fl_base = (boot_seg == 0) ? FL_COO_W : (boot_seg == 1) ? FL_C_W :
+                               (boot_seg == 2) ? FL_NB_W : (boot_seg == 3) ? FL_ZM_W :
+                               (boot_seg == 4) ? FL_BAND_W : FL_G_W;
+    wire [15:0] boot_fl_len  = (boot_seg == 0) ? 16'd9566 : (boot_seg == 1) ? 16'd1100 :
+                               (boot_seg == 2) ? 16'd2107 : (boot_seg == 3) ? 16'd2107 :
+                               (boot_seg == 4) ? 16'd19800 : 16'd3207;
     // FP64 comparison (a > b), combinational, no NaN/denormal handling needed here
     reg  [63:0] cmp_a, cmp_b;
     wire cmp_gt = (cmp_a[63] != cmp_b[63]) ? (~cmp_a[63]) :
@@ -353,7 +396,9 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            st <= S_INIT0; done <= 0;
+            st <= S_BOOT_WAIT; done <= 0;
+            boot_seg <= 0; boot_sram_req <= 0; boot_sram_waddr <= 0; boot_sram_wdata <= 0;
+            booting <= 0; flash_req <= 0; flash_waddr <= 0;
             own_addr <= 0; own_wdata <= 0; own_we <= 0;
             ks_start <= 0; ks_band_valid <= 0; ks_din_valid <= 0;
             ks_band_in <= 0; ks_x_in <= 0;
@@ -388,21 +433,67 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             saty_start <= 0; saty_din_valid <= 0;
             sax_start <= 0; sax_din_valid <= 0;
             logp_start <= 0; logd_start <= 0; exp_start <= 0;
+            flash_req <= 0; boot_sram_req <= 0;
             if (ks_band_valid && !ks_band_ready) ks_band_valid <= 0;   // level-held: clear after LDL sampled
             own_we <= 0;
             scale_valid_p <= scale_valid;
             case (st)
-            // ---- boot: load zmask bits from DY area (tb preloaded zmask data) ----
+            // ============ boot: Flash -> SRAM/smem, then compute diag_r/D_y/band/g ============
+            S_BOOT_WAIT: begin
+                if (flash_ready) begin boot_seg <= 0; i <= 0; st <= S_BOOT_F; end
+            end
+            S_BOOT_F: begin
+                flash_waddr <= boot_fl_base + i; flash_req <= 1; st <= S_BOOT_FW;
+            end
+            S_BOOT_FW: begin
+                if (flash_busy_p && !flash_busy) begin   // flash word ready in flash_rdata
+                    case (boot_seg)
+                    0: begin boot_sram_req <= 1; boot_sram_waddr <= COO_BASE + i; boot_sram_wdata <= flash_rdata; end
+                    1: begin own_addr <= CB_BASE + i; own_wdata <= flash_rdata; own_we <= 1; end
+                    2: begin own_addr <= CB_BASE + N + i; own_wdata <= flash_rdata; own_we <= 1; end
+                    3: begin own_addr <= ZMASK_BASE + i; own_wdata <= flash_rdata; own_we <= 1; end
+                    4: begin boot_sram_req <= 1; boot_sram_waddr <= AA_BASE + i; boot_sram_wdata <= flash_rdata; end
+                    default: begin own_addr <= G_BASE + i; own_wdata <= flash_rdata; own_we <= 1; end
+                    endcase
+                    st <= S_BOOT_W;
+                end
+            end
+            S_BOOT_W: begin
+                if (boot_seg == 0 || boot_seg == 4) begin
+                    if (sram_busy_p && !sram_busy) st <= S_BOOT_WW;   // sram write done
+                end else st <= S_BOOT_WW;                             // ram write (1 cycle)
+            end
+            S_BOOT_WW: begin
+                if (i + 1 >= boot_fl_len) begin
+                    if (boot_seg == 5) begin i <= 0; st <= S_BOOT_V0; end
+                    else begin boot_seg <= boot_seg + 1; i <= 0; st <= S_BOOT_F; end
+                end else begin i <= i + 1; st <= S_BOOT_F; end
+            end
+            // ---- v0 = [0..0, 1.0] (homogeneous self-dual embedding initial point) ----
+            S_BOOT_V0: begin
+                own_addr <= i; own_wdata <= (i == LM1) ? 64'h3FF0000000000000 : 64'h0; own_we <= 1;
+                if (i + 1 >= L) begin i <= 0; st <= S_BOOT_DR; end
+                else begin i <= i + 1; st <= S_BOOT_V0; end
+            end
+            // ---- diag_r[:n] = rho_x, diag_r[n+m] = tau_factor (r_y is filled by S_SX) ----
+            S_BOOT_DR: begin
+                if (i < N) begin own_addr <= DR_BASE + i; own_wdata <= RHO_X; own_we <= 1; end
+                else begin own_addr <= DR_BASE + N + M; own_wdata <= TAU_FACTOR; own_we <= 1; end
+                if (i + 1 >= N + 1) begin booting <= 1; st <= S_INIT0; end
+                else begin i <= i + 1; st <= S_BOOT_DR; end
+            end
+            // ---- boot: load zmask bits from DY area (just written from Flash) ----
             S_INIT0: begin i <= 0; own_addr <= ZMASK_BASE; st <= S_W11; end
             S_INIT1: begin zm <= ram_rdata; st <= S_INIT2; end
             S_INIT2: begin
                 zmask_bits[i] <= (zm != 64'h0);
-                if (i + 1 >= M) st <= S_IDLE;
+                if (i + 1 >= M) st <= (booting ? S_SX0 : S_IDLE);
                 else begin i <= i + 1; own_addr <= ZMASK_BASE + i + 1; st <= S_W12; end
             end
             S_IDLE: begin
                 done <= 0;
                 scale_flow <= 0;
+                booting <= 0;
                 if (scale_valid && !scale_valid_p) begin scale_cur <= scale_r; i <= 0; own_addr <= ZMASK_BASE; st <= S_W1; end
                 else if (start) begin
                     if (iter == 0) begin i <= 0; own_addr <= V_BASE; st <= S_W13; end  // FEAS: v_prev=v0, no normalize
@@ -644,7 +735,10 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                 own_addr <= DY_BASE + i; own_wdata <= po2; own_we <= 1; st <= S_SX6;
             end
             S_SX6: begin
-                if (i + 1 >= M) begin sb_start <= 1; st <= S_SB; end
+                if (i + 1 >= M) begin
+                    if (booting) st <= S_IDLE;   // boot: diag_r/D_y done; band pre-loaded from Flash
+                    else begin sb_start <= 1; st <= S_SB; end
+                end
                 else begin i <= i + 1; st <= S_SX2; end
             end
             // ---- s_build: rebuild S band into BAND_BASE ----
