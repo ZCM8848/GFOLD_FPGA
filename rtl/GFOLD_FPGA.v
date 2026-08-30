@@ -101,11 +101,11 @@ module GFOLD_FPGA (
     end
     assign start = started && !done;
 
-    // ---- inputs (no data loaded yet; refactor once at start) ----
+    // ---- drs_iter control inputs (solver data loaded by boot FSM from Flash) ----
     assign refactor    = 1'b1;
     assign band_valid  = 1'b0;
     assign band_in     = 64'd0;
-    assign iter        = 16'd0;
+    assign iter        = iter_cnt;   // current iteration (0 = FEAS, >0 = normalize)
     assign scale_valid = 1'b0;
     assign scale_r     = 64'h3FF0000000000000;
 

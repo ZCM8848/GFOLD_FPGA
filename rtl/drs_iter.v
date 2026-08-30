@@ -357,6 +357,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
  reg [63:0] denom_pri, denom_dual, rel_pri, rel_dual;
  reg [63:0] sum_log_r, scale_cur, tau_scl, new_scale;
  reg signed [15:0] n_log_r, last_scale_iter;
+ reg [4:0] mod25_cnt;                  // iter mod 25 (avoids a 16-bit comb % divider)
  reg [63:0] aty_i, c_i, ax_i, s_i, nb_i;
  reg [63:0] saty_pf, sax_pf;
     wire [63:0] log_relp, log_reld, exp_out;
@@ -422,7 +423,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             max_aty <= 0; max_px <= 0; max_ax <= 0; max_s <= 0; max_axs <= 0;
             denom_pri <= 0; denom_dual <= 0; rel_pri <= 0; rel_dual <= 0;
             sum_log_r <= 0; scale_cur <= 64'h3FF0000000000000; tau_scl <= 0; new_scale <= 0;  // scale_cur init 1.0
-            n_log_r <= 0; last_scale_iter <= -16'd100; aty_i <= 0; c_i <= 0; ax_i <= 0; s_i <= 0; nb_i <= 0;
+            n_log_r <= 0; last_scale_iter <= -16'd100; mod25_cnt <= 0; aty_i <= 0; c_i <= 0; ax_i <= 0; s_i <= 0; nb_i <= 0;
             logp_start <= 0; logd_start <= 0; exp_start <= 0;
             zmask_bits <= 0;
         end else begin
@@ -837,12 +838,13 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             end
 
             S_DONE: begin
-                if (iter % 25 == 0 && iter > 0 && !scale_flow) begin
+                if (mod25_cnt == 5'd0 && iter > 0 && !scale_flow) begin
                     // run the residual+scale chain THIS iteration before done,
                     // otherwise it bleeds into the next iter and skips its DRS step.
                     done <= 0;
                     i <= 0; own_addr <= U_BASE + N; st <= S_W4;
                 end else begin
+                    mod25_cnt <= (mod25_cnt == 5'd24) ? 5'd0 : mod25_cnt + 5'd1;
                     done <= 1; st <= S_IDLE;
                 end
             end
