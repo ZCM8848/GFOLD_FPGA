@@ -52,6 +52,9 @@ module drs_iter #(
     output wire              kkt_we,
     input  wire [63:0]       kkt_rdata,
     output reg               done,
+    output reg  [3:0]        verb,            // current FSM phase (AGC-style VERB)
+    output wire [63:0]       scale_cur_out,   // adaptive scale (for display)
+    output wire [63:0]       tau_out,         // root_plus tau (for display)
     // ---- LDL band ready (back-pressure to the upstream band streamer) ----
     output wire              band_ready,
     // ---- external SRAM (sram64_ctrl; shared by Anderson + LDL via arbiter) ----
@@ -359,6 +362,38 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
  reg signed [15:0] n_log_r, last_scale_iter;
  reg [4:0] mod25_cnt;                  // iter mod 25 (avoids a 16-bit comb % divider)
  reg [63:0] aty_i, c_i, ax_i, s_i, nb_i;
+
+ // ---- display outputs (AGC-style VERB phase + adaptive scale + tau) ----
+ assign scale_cur_out = scale_cur;
+ assign tau_out = rp_tau;
+ always @(*) begin
+     if (st == S_IDLE)                       verb = 4'd0;
+     else if (st >= S_BOOT_WAIT)             verb = 4'd1;   // 297-303 BOOT
+     else if (st == S_INIT0 || st == S_INIT1 || st == S_INIT2) verb = 4'd1;  // 146-148 BOOT
+     else if (st == S_GKSBH)                 verb = 4'd3;   // 296 KKT band handshake
+     else if (st >= S_SCL0 && st <= S_SCLB_EXPW) verb = 4'd8;  // 150-203 SCALE
+     else if (st >= S_GKSVX0 && st <= S_GKSDY0) verb = 4'd3;   // 139-145 KKT
+     else if (st == S_SX6)                   verb = 4'd8;      // 138 SCALE
+     else if (st >= S_VR0 && st <= S_VR8)    verb = 4'd8;      // 128-137 SCALE
+     else if (st >= S_GKS0 && st <= S_GKSD)  verb = 4'd3;      // 118-125 KKT
+     else if (st >= S_SX0 && st <= S_SBW)    verb = 4'd8;      // 110-117 SCALE
+     else if (st >= S_SG0 && st <= S_SCP3)   verb = 4'd8;      // 85-102 SCALE
+     else if (st >= S_VPC0 && st <= S_VPC3)  verb = 4'd2;      // 81-84 NORM
+     else if (st == S_NM4)                   verb = 4'd2;      // 67 NORM
+     else if (st == S_RP5)                   verb = 4'd4;      // 68 ROOT
+     else if (st == S_DONE)                  verb = 4'd9;      // 66 DONE
+     else if (st >= S_V0 && st <= S_V7)      verb = 4'd5;      // 58-65 UPDT
+     else if (st >= S_RSK0 && st <= S_RSK9)  verb = 4'd7;      // 48-57 RESID
+     else if (st >= S_UM0 && st <= S_UMW)    verb = 4'd5;      // 45-47 UPDT
+     else if (st == S_CONE || st == S_CONEW) verb = 4'd6;      // 43-44 CONE
+     else if (st >= S_UTT2 && st <= S_U5)    verb = 4'd5;      // 29-42 UPDT
+     else if (st >= S_RP0 && st <= S_RPW)    verb = 4'd4;      // 23-28 ROOT
+     else if (st == S_KSDONE_ETA)            verb = 4'd3;      // 22 KKT
+     else if (st == S_UTT)                   verb = 4'd5;      // 21 UPDT
+     else if (st >= S_KSSTART && st <= S_KSDONE) verb = 4'd3;  // 13-20 KKT
+     else if (st >= S_NM0 && st <= S_NMV4)   verb = 4'd2;      // 1-12 NORM
+     else                                    verb = 4'd0;      // wait states -> IDLE
+ end
  reg [63:0] saty_pf, sax_pf;
     wire [63:0] log_relp, log_reld, exp_out;
     wire [63:0] newscale_mul;

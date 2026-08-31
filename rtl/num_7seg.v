@@ -14,6 +14,12 @@ module num_7seg(		// This is correct
 			4'b0111: hex = 7'b1111000;
 			4'b1000: hex = 7'b0000000;
 			4'b1001: hex = 7'b0010000;
+			4'b1010: hex = 7'b0001000;  // A
+			4'b1011: hex = 7'b0000011;  // b
+			4'b1100: hex = 7'b1000110;  // C
+			4'b1101: hex = 7'b0100001;  // d
+			4'b1110: hex = 7'b0000110;  // E
+			4'b1111: hex = 7'b0001110;  // F
 			default: hex = 7'b1111111;
 		endcase
 	end

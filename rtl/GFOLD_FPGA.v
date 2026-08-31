@@ -33,10 +33,12 @@ module GFOLD_FPGA (
     wire pll_locked;
     pll30 u_pll(.areset(1'b0), .inclk0(CLOCK_50), .c0(clk), .locked(pll_locked));
 
-    // ---- reset (KEY0 raw, async ok) + start (KEY1 debounced pulse) ----
+    // ---- reset (KEY0 raw, async ok) + start (KEY1) + page (KEY2/KEY3) ----
     wire rst_n = KEY[0];   // KEY0 pressed = low = reset
-    wire key1_pulse;
+    wire key1_pulse, key2_pulse, key3_pulse;
     key_debounce u_k1(.clk(clk), .rst_n(1'b1), .key(~KEY[1]), .key_pulse(key1_pulse));
+    key_debounce u_k2(.clk(clk), .rst_n(1'b1), .key(~KEY[2]), .key_pulse(key2_pulse));
+    key_debounce u_k3(.clk(clk), .rst_n(1'b1), .key(~KEY[3]), .key_pulse(key3_pulse));
 
     // ---- drs_iter ----
     wire start, done;
@@ -46,6 +48,8 @@ module GFOLD_FPGA (
     wire [63:0] band_in;
     wire scale_valid;
     wire [63:0] scale_r;
+    wire [3:0]  verb;
+    wire [63:0] scale_cur_out, tau_out;
     wire [16:0] ram_addr;
     wire [63:0] ram_wdata;
     wire        ram_we;
@@ -71,6 +75,7 @@ module GFOLD_FPGA (
         .ram_addr(ram_addr), .ram_wdata(ram_wdata), .ram_we(ram_we), .ram_rdata(ram_rdata),
         .kkt_addr(kkt_addr), .kkt_wdata(kkt_wdata), .kkt_we(kkt_we), .kkt_rdata(kkt_rdata),
         .done(done), .band_ready(band_ready),
+        .verb(verb), .scale_cur_out(scale_cur_out), .tau_out(tau_out),
         .SRAM_ADDR(SRAM_ADDR), .SRAM_DQ(SRAM_DQ),
         .SRAM_CE_N(SRAM_CE_N), .SRAM_OE_N(SRAM_OE_N), .SRAM_WE_N(SRAM_WE_N),
         .SRAM_UB_N(SRAM_UB_N), .SRAM_LB_N(SRAM_LB_N),
@@ -101,6 +106,10 @@ module GFOLD_FPGA (
     end
     assign start = started && !done;
 
+    // ---- iteration counter (increments on done; feeds drs_iter.iter + display) ----
+    reg [15:0] iter_cnt;
+    reg done_p;
+
     // ---- drs_iter control inputs (solver data loaded by boot FSM from Flash) ----
     assign refactor    = 1'b1;
     assign band_valid  = 1'b0;
@@ -108,10 +117,6 @@ module GFOLD_FPGA (
     assign iter        = iter_cnt;   // current iteration (0 = FEAS, >0 = normalize)
     assign scale_valid = 1'b0;
     assign scale_r     = 64'h3FF0000000000000;
-
-    // ---- iteration counter for display (increments on done) ----
-    reg [15:0] iter_cnt;
-    reg done_p;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin iter_cnt <= 0; done_p <= 0; end
         else begin
@@ -120,26 +125,45 @@ module GFOLD_FPGA (
         end
     end
 
+    // ---- NOUN page (KEY2 prev / KEY3 next, wraps 0..3: MASS/SCALE/TAU/ITER) ----
+    reg [1:0] page;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) page <= 2'd0;
+        else begin
+            if (key2_pulse)      page <= (page == 2'd0) ? 2'd3 : page - 2'd1;
+            else if (key3_pulse) page <= (page == 2'd3) ? 2'd0 : page + 2'd1;
+        end
+    end
+
     // ---- LCD status display ----
     wire [7:0] lcd_cmd_data; wire lcd_cmd_valid, lcd_is_data, lcd_busy;
     gf_display u_disp(.clk(clk), .rst_n(rst_n), .iter(iter_cnt),
-        .scale(scale_r), .x1099(disp_mass),
+        .page(page), .x1099(disp_mass), .scale_cur(scale_cur_out), .tau(tau_out),
         .cmd_data(lcd_cmd_data), .cmd_valid(lcd_cmd_valid), .is_data(lcd_is_data), .busy(lcd_busy));
     lcd_driver u_lcd(.clk(clk), .rst_n(rst_n),
         .cmd_data(lcd_cmd_data), .cmd_valid(lcd_cmd_valid), .is_data(lcd_is_data), .busy(lcd_busy),
         .LCD_DATA(LCD_DATA), .LCD_EN(LCD_EN), .LCD_RS(LCD_RS), .LCD_RW(LCD_RW), .LCD_ON(LCD_ON));
 
-    // ---- 7-seg: HEX3..0 = iter (hex), HEX7..4 = scale exponent/pattern ----
+    // ---- 7-seg (AGC DSKY style) ----
+    // HEX3..0 = iter (hex), HEX5..4 = NOUN (page+1), HEX7..6 = VERB (phase)
     num_7seg u_h0(.c(iter_cnt[3:0]),  .hex(HEX0));
     num_7seg u_h1(.c(iter_cnt[7:4]),  .hex(HEX1));
     num_7seg u_h2(.c(iter_cnt[11:8]), .hex(HEX2));
     num_7seg u_h3(.c(iter_cnt[15:12]),.hex(HEX3));
-    num_7seg u_h4(.c(4'hf), .hex(HEX4));
-    num_7seg u_h5(.c(4'h0), .hex(HEX5));
-    num_7seg u_h6(.c(4'h0), .hex(HEX6));
-    num_7seg u_h7(.c(4'h0), .hex(HEX7));
+    num_7seg u_h4(.c(page + 2'd1),    .hex(HEX4));   // NOUN units (1..4)
+    num_7seg u_h5(.c(4'd0),           .hex(HEX5));   // NOUN tens (0)
+    num_7seg u_h6(.c(verb),           .hex(HEX6));   // VERB units
+    num_7seg u_h7(.c(4'd0),           .hex(HEX7));   // VERB tens (0)
 
-    // ---- status LEDs ----
-    assign LEDR = { done, started, 16'd0 };
-    assign LEDG = { 8'd0, pll_locked };
+    // ---- status LEDs (AGC DSKY style) ----
+    // LEDG[0]=COMP ACTY, [1]=PROG, [2]=RST, [3]=DONE, [4]=PLL
+    assign LEDG = { 4'd0, pll_locked, done, ~rst_n, started, (started && !done) };
+    // LEDR[5:0] = SCALE/CONE/ROOT/KKT/NORM/BOOT phase lamps
+    assign LEDR = { 12'd0,
+                    (verb == 4'd8),  // LEDR[5] SCALE
+                    (verb == 4'd6),  // LEDR[4] CONE
+                    (verb == 4'd4),  // LEDR[3] ROOT
+                    (verb == 4'd3),  // LEDR[2] KKT
+                    (verb == 4'd2),  // LEDR[1] NORM
+                    (verb == 4'd1) };// LEDR[0] BOOT
 endmodule
