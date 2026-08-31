@@ -10,6 +10,7 @@
 module GFOLD_FPGA (
     input  wire       CLOCK_50,
     input  wire [3:0] KEY,
+    input  wire [17:0] SW,
     output wire [17:0] LEDR,
     output wire [8:0]  LEDG,
     // ---- LCD (HD44780 via lcd_driver) ----
@@ -98,17 +99,26 @@ module GFOLD_FPGA (
     always @(posedge clk) kkt_rdata <= kmem[kkt_addr];
     always @(posedge clk) if (kkt_we) kmem[kkt_addr] <= kkt_wdata;
 
-    // ---- start: KEY1 edge (after reset, drs_iter in S_IDLE) ----
+    // ---- iteration counter (increments on done; feeds drs_iter.iter + display) ----
+    reg [15:0] iter_cnt;
+    reg done_p;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin iter_cnt <= 0; done_p <= 0; end
+        else begin
+            done_p <= done;
+            if (done && !done_p) iter_cnt <= iter_cnt + 1;
+        end
+    end
+
+    // ---- start: KEY1 edge; SW[15:0] = iteration limit (0 -> never runs) ----
     reg started = 0;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n)      started <= 0;
         else if (key1_pulse) started <= 1;
     end
-    assign start = started && !done;
-
-    // ---- iteration counter (increments on done; feeds drs_iter.iter + display) ----
-    reg [15:0] iter_cnt;
-    reg done_p;
+    assign start = started && !done && (iter_cnt < SW[15:0]);
+    wire done_all = started && (SW[15:0] != 16'd0) && (iter_cnt >= SW[15:0]);
+    wire [3:0] disp_verb = done_all ? 4'd9 : verb;   // 09 = DONE (iteration limit reached)
 
     // ---- drs_iter control inputs (solver data loaded by boot FSM from Flash) ----
     assign refactor    = 1'b1;
@@ -117,13 +127,6 @@ module GFOLD_FPGA (
     assign iter        = iter_cnt;   // current iteration (0 = FEAS, >0 = normalize)
     assign scale_valid = 1'b0;
     assign scale_r     = 64'h3FF0000000000000;
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin iter_cnt <= 0; done_p <= 0; end
-        else begin
-            done_p <= done;
-            if (done && !done_p) iter_cnt <= iter_cnt + 1;
-        end
-    end
 
     // ---- NOUN page (KEY2 prev / KEY3 next, wraps 0..3: MASS/SCALE/TAU/ITER) ----
     reg [1:0] page;
@@ -152,12 +155,12 @@ module GFOLD_FPGA (
     num_7seg u_h3(.c(iter_cnt[15:12]),.hex(HEX3));
     num_7seg u_h4(.c(page + 2'd1),    .hex(HEX4));   // NOUN units (1..4)
     num_7seg u_h5(.c(4'd0),           .hex(HEX5));   // NOUN tens (0)
-    num_7seg u_h6(.c(verb),           .hex(HEX6));   // VERB units
+    num_7seg u_h6(.c(disp_verb),      .hex(HEX6));   // VERB units (09=DONE when limit reached)
     num_7seg u_h7(.c(4'd0),           .hex(HEX7));   // VERB tens (0)
 
     // ---- status LEDs (AGC DSKY style) ----
-    // LEDG[0]=COMP ACTY, [1]=PROG, [2]=RST, [3]=DONE, [4]=PLL
-    assign LEDG = { 4'd0, pll_locked, done, ~rst_n, started, (started && !done) };
+    // LEDG[0]=COMP ACTY, [1]=PROG, [2]=RST, [3]=DONE, [4]=PLL, [5]=SOLVED(iter limit)
+    assign LEDG = { 3'd0, done_all, pll_locked, done, ~rst_n, started, (started && !done) };
     // LEDR[5:0] = SCALE/CONE/ROOT/KKT/NORM/BOOT phase lamps
     assign LEDR = { 12'd0,
                     (verb == 4'd8),  // LEDR[5] SCALE
