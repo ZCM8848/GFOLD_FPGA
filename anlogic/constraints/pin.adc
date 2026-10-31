@@ -1,0 +1,32 @@
+# gfold_m1 — 引脚约束（与 eth_smoke 同一块板，去掉 UART）
+# 依据：HX1P35A 开发板原理图 + eth_smoke 实测
+
+# ---- 系统时钟（板载 50MHz 有源晶振）----
+set_pin_assignment { I_sys_clk }      { LOCATION = C4;  IOSTANDARD = LVCMOS33; PULLTYPE = PULLUP; }
+
+# ---- 4 个板载 LED ----
+set_pin_assignment { O_led[0] }       { LOCATION = D10; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; }
+set_pin_assignment { O_led[1] }       { LOCATION = E10; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; }
+set_pin_assignment { O_led[2] }       { LOCATION = C6;  IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; }
+set_pin_assignment { O_led[3] }       { LOCATION = D6;  IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; }
+
+# ---- RGMII TX（FPGA → PHY）----
+set_pin_assignment { O_rgmii_txc }    { LOCATION = U9;  IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = NONE; OUTDEL = 2; }
+set_pin_assignment { O_rgmii_tx_ctl } { LOCATION = R10; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = NONE; }
+set_pin_assignment { O_rgmii_txd[0] } { LOCATION = R11; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = NONE; }
+set_pin_assignment { O_rgmii_txd[1] } { LOCATION = P11; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = NONE; }
+set_pin_assignment { O_rgmii_txd[2] } { LOCATION = T10; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = NONE; }
+set_pin_assignment { O_rgmii_txd[3] } { LOCATION = R12; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = NONE; }
+
+# ---- RGMII RX（PHY → FPGA）----
+set_pin_assignment { I_rgmii_rxc }    { LOCATION = V3;  IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
+set_pin_assignment { I_rgmii_rx_ctl } { LOCATION = N8;  IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
+set_pin_assignment { I_rgmii_rxd[0] } { LOCATION = N9;  IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
+set_pin_assignment { I_rgmii_rxd[1] } { LOCATION = T7;  IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
+set_pin_assignment { I_rgmii_rxd[2] } { LOCATION = T8;  IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
+set_pin_assignment { I_rgmii_rxd[3] } { LOCATION = T9;  IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
+
+# ---- 管理 / 控制 ----
+set_pin_assignment { O_rgmii_mdc }    { LOCATION = V9;  IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = NONE; }
+set_pin_assignment { IO_rgmii_mdio }  { LOCATION = U10; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = PULLUP; }
+set_pin_assignment { O_phy_rst_n }    { LOCATION = V8;  IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; PULLTYPE = PULLUP; }

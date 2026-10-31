@@ -36,6 +36,32 @@ __pycache__/
 target/
 Cargo.lock
 
+# Anlogic TD build artifacts (regenerable)
+anlogic/td_project/*_Runs/
+anlogic/td_project/syn_1/*.db
+anlogic/td_project/syn_1/*.area
+anlogic/td_project/syn_1/*.timing
+anlogic/td_project/syn_1/*.ts
+anlogic/td_project/syn_1/*.qor
+anlogic/td_project/syn_1/flow.status
+anlogic/td_project/syn_1/.*.f
+anlogic/td_project/syn_1/*.log
+anlogic/td_project/syn_1/*.logw
+anlogic/td_project/phy_1/*.db
+anlogic/td_project/phy_1/*.area
+anlogic/td_project/phy_1/*.timing
+anlogic/td_project/phy_1/*.ts
+anlogic/td_project/phy_1/*.qor
+anlogic/td_project/phy_1/flow.status
+anlogic/td_project/phy_1/place_flow.status
+anlogic/td_project/phy_1/route_flow.status
+anlogic/td_project/phy_1/.*.f
+anlogic/td_project/phy_1/*.log
+anlogic/td_project/phy_1/*.logw
+anlogic/td_project/phy_1/*.bit
+anlogic/td_project/phy_1/*_clock_utilization.txt
+anlogic/td_project/phy_1/*_exception.timing
+
 # OS
 Thumbs.db
 .DS_Store
@@ -102,3 +128,4 @@ rtl/sim/vsim.wlf
 rtl/sim/wlft*
 rtl/sim/sbuild_small_dump.txt
 rtl/sim/drsi_c.txt
+anlogic/td_project/phy_1/*.rpt
