@@ -22,8 +22,8 @@ module udp_reply_tx #(
     input  wire [15:0] dst_port,
     input  wire [7:0]  ack_type,       // 0x02 = ACK
     input  wire [15:0] ack_seq,
-    input  wire [31:0] rx_frame_count,
-    input  wire [31:0] link_status,
+    input  wire [31:0] payload_w0,      // LE 32-bit word at idx 58-61
+    input  wire [31:0] payload_w1,      // LE 32-bit word at idx 62-65
 
     output wire        busy,
     output reg         done,
@@ -115,16 +115,15 @@ module udp_reply_tx #(
             7'd55 : b = ack_seq[7:0];
             7'd56 : b = 8'h00;            // nwords = 1
             7'd57 : b = 8'h01;
-            // payload: rx_frame_count (LE)
-            7'd58 : b = rx_frame_count[7:0];
-            7'd59 : b = rx_frame_count[15:8];
-            7'd60 : b = rx_frame_count[23:16];
-            7'd61 : b = rx_frame_count[31:24];
-            // payload: link_status (LE)
-            7'd62 : b = link_status[7:0];
-            7'd63 : b = link_status[15:8];
-            7'd64 : b = link_status[23:16];
-            7'd65 : b = link_status[31:24];
+            // payload (LE)
+            7'd58 : b = payload_w0[7:0];
+            7'd59 : b = payload_w0[15:8];
+            7'd60 : b = payload_w0[23:16];
+            7'd61 : b = payload_w0[31:24];
+            7'd62 : b = payload_w1[7:0];
+            7'd63 : b = payload_w1[15:8];
+            7'd64 : b = payload_w1[23:16];
+            7'd65 : b = payload_w1[31:24];
             // padding（66-67 = 0x00, default 已覆盖）
             default: b = 8'h00;
         endcase
