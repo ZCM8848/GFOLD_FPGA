@@ -40,7 +40,17 @@ module banded_ldl_fp64_rb #(
     output reg  [17:0] sram_waddr,
     output reg  [63:0] sram_wdata,
     input  wire        sram_busy,
-    input  wire [63:0] sram_rdata
+    input  wire [63:0] sram_rdata,
+    // Pool channels (replaces internal fp64_mul/add/div)
+    output wire [63:0] mul_a, mul_b,
+    input  wire [63:0] mul_o,
+    output wire [63:0] add_a, add_b,
+    output reg         add_sub,
+    input  wire [63:0] add_o,
+    output reg         div_start,
+    output reg  [63:0] div_a, div_b,
+    input  wire        div_done,
+    input  wire [63:0] div_o
 );
     // ---------- SRAM address map ----------
     // ---- SRAM layout (word addresses; offset by AA_BASE to clear the Anderson region) ----
@@ -76,17 +86,7 @@ module banded_ldl_fp64_rb #(
     end
     wire sram_done = sram_done_r;
 
-    // fp64 units (mul/add combinational, div sequential)
-    wire [63:0] mul_a, mul_b, mul_o;
-    fp64_mul um(mul_a, mul_b, mul_o);
-    wire [63:0] add_a, add_b, add_o;
-    reg add_sub;
-    fp64_add ua(add_a, add_b, add_sub, add_o);
-    reg div_start;
-    reg [63:0] div_a, div_b;
-    wire div_done;
-    wire [63:0] div_o;
-    fp64_div udiv(clk, div_start, div_a, div_b, div_done, div_o);
+    // fp64 units removed — arithmetic via pool ports above
 
     // pipelined operand regs (sampled from SRAM reads)
     reg [63:0] mul_a_r, mul_b_r, add_a_b, rd_tmp, mul_o_r;

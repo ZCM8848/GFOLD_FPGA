@@ -37,7 +37,13 @@ module spmv_fp64 #(parameter N = 10, M = 20, NNZ = 41,
     output reg  [17:0]  sram_waddr,
     output reg  [63:0]  sram_wdata,
     input  wire         sram_busy,
-    input  wire [63:0]  sram_rdata
+    input  wire [63:0]  sram_rdata,
+    // Pool channels (1 mul + 1 add, combinational)
+    output wire [63:0]  mul0_a, mul0_b,
+    input  wire [63:0]  mul0_o,
+    output wire [63:0]  add0_a, add0_b,
+    output wire         add0_sub,
+    input  wire [63:0]  add0_o
 );
     localparam LENX = transpose ? M : N;    // x length
     localparam LENO = transpose ? N : M;    // out length
@@ -45,9 +51,10 @@ module spmv_fp64 #(parameter N = 10, M = 20, NNZ = 41,
     localparam OFF  = LMAX;                 // out region offset in RAM
 
     reg [63:0] pa, pb, sa, sb, cur, xv, acc_new, rowcol, aval; reg ssub;
-    wire [63:0] po, so;
-    fp64_mul um(pa, pb, po);
-    fp64_add us(sa, sb, ssub, so);
+    // Pool connections
+    assign mul0_a = pa; assign mul0_b = pb;
+    assign add0_a = sa; assign add0_b = sb; assign add0_sub = ssub;
+    wire [63:0] po = mul0_o, so = add0_o;  // aliases for original FSM logic
 
     reg [31:0] wp, kk, op;
     reg [15:0] acc_r, src_r;

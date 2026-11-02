@@ -7,7 +7,13 @@ module normalize_v #(parameter N = 8) (
     input  wire [N*64-1:0]  v_in,
     input  wire [63:0]      sqrtN,
     output reg              done,
-    output reg  [N*64-1:0]  v_out
+    output reg  [N*64-1:0]  v_out,
+    // Pool channels
+    output wire [63:0]  mul0_a, mul0_b,
+    input  wire [63:0]  mul0_o,
+    output wire [63:0]  add0_a, add0_b,
+    output wire         add0_sub,
+    input  wire [63:0]  add0_o
 );
     wire [63:0] vi [0:N-1];
     genvar g;
@@ -15,9 +21,9 @@ module normalize_v #(parameter N = 8) (
         assign vi[g] = v_in[(g+1)*64-1 -: 64];
     end endgenerate
 
-    reg [63:0] pa, pb, sa, sb; reg ssub; wire [63:0] po, so;
-    fp64_mul up(pa, pb, po);
-    fp64_add us(sa, sb, ssub, so);
+    reg [63:0] pa, pb, sa, sb; reg ssub;
+    assign mul0_a = pa; assign mul0_b = pb; assign add0_a = sa; assign add0_b = sb; assign add0_sub = ssub;
+    wire [63:0] po = mul0_o, so = add0_o;
     reg rr_start; reg [63:0] r_acc; wire rr_done; wire [63:0] rr_o;
     fp64_rsqrt ur(clk, rr_start, r_acc, rr_done, rr_o);
 
