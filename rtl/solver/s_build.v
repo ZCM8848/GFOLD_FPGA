@@ -36,7 +36,13 @@ module s_build #(
     output reg  [17:0]   sram_waddr,
     output reg  [63:0]   sram_wdata,
     input  wire          sram_busy,
-    input  wire [63:0]   sram_rdata
+    input  wire [63:0]   sram_rdata,
+    // Pool channels
+    output wire [63:0]  mul0_a, mul0_b,
+    input  wire [63:0]  mul0_o,
+    output wire [63:0]  add0_a, add0_b,
+    output wire         add0_sub,
+    input  wire [63:0]  add0_o
 );
     localparam RHO_X = 64'h3eb0c6f7a0b5ed8d;   // 1e-6 (bit-exact double)
 
@@ -76,11 +82,16 @@ module s_build #(
     reg [63:0] dy_row, band_r, acc_r, t1_r, po_m2_r;
     reg last_row_flag;
 
-    // ---- FP64 units (combinational) ----
+    // ---- FP64 via pool ----
+    // mul0: um1 (vals[pa]*vals[pb]) in S_PAIR_BAND; um2 (t1_r*dy_row) in S_PAIR_M2ACC
+    // add0: uacc (band_r + po_m2_r) in S_PAIR_M2ACCr
     wire [63:0] po_m1, po_m2, so_acc;
-    fp64_mul um1(vals[pa], vals[pb], po_m1);
-    fp64_mul um2(t1_r, dy_row, po_m2);
-    fp64_add uacc(band_r, po_m2_r, 1'b0, so_acc);
+    assign mul0_a = (st == S_PAIR_M2ACC || st == S_PAIR_M2ACCr) ? t1_r : vals[pa];
+    assign mul0_b = (st == S_PAIR_M2ACC || st == S_PAIR_M2ACCr) ? dy_row : vals[pb];
+    assign add0_a = band_r; assign add0_b = po_m2_r; assign add0_sub = 1'b0;
+    assign po_m1 = mul0_o;  // when in S_PAIR_BAND state
+    assign po_m2 = mul0_o;  // when in S_PAIR_M2ACC state
+    assign so_acc = add0_o;
     wire [15:0] c_lo_w = (cols[pa] < cols[pb]) ? cols[pa] : cols[pb];
     wire [15:0] c_hi_w = (cols[pa] < cols[pb]) ? cols[pb] : cols[pa];
     wire [15:0] dc_w = c_hi_w - c_lo_w;
