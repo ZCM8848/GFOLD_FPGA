@@ -117,34 +117,31 @@ module rx_proto #(
                     // IP total length（idx 16-17）
                     11'd16: ip_total_r[15:8] <= frame_data;
                     11'd17: ip_total_r[7:0]  <= frame_data;
-                    // ARP opcode（idx 28-29）/ IP src IP 低两字节
-                    11'd28: begin arp_op_hi <= frame_data; ip_src_r[15:8] <= frame_data; end
-                    11'd29: begin arp_op_lo <= frame_data; ip_src_r[7:0]  <= frame_data; end
+                    // ARP opcode（idx 20-21；ARP payload 从 idx 14 起，opcode 在偏移 6-7）
+                    11'd20: arp_op_hi <= frame_data;
+                    11'd21: arp_op_lo <= frame_data;
                     // IP protocol（idx 23）
                     11'd23: ip_proto_r <= frame_data;
                     // IP src IP 高两字节（idx 26-27）
                     11'd26: ip_src_r[31:24] <= frame_data;
                     11'd27: ip_src_r[23:16] <= frame_data;
-                    // IP dst IP（idx 30-33）
-                    11'd30: ip_dst_r[31:24] <= frame_data;
-                    11'd31: ip_dst_r[23:16] <= frame_data;
+                    // ARP sender IP（idx 28-31；偏移 14-17）/ IP src IP 低两字节
+                    11'd28: begin arp_sip_r[31:24] <= frame_data; ip_src_r[15:8] <= frame_data; end
+                    11'd29: begin arp_sip_r[23:16] <= frame_data; ip_src_r[7:0]  <= frame_data; end
+                    // ARP sender IP 低两字节 / IP dst IP 高两字节（idx 30-31）
+                    11'd30: begin arp_sip_r[15:8]  <= frame_data; ip_dst_r[31:24] <= frame_data; end
+                    11'd31: begin arp_sip_r[7:0]   <= frame_data; ip_dst_r[23:16] <= frame_data; end
+                    // IP dst IP 低两字节（idx 32-33）
                     11'd32: ip_dst_r[15:8]  <= frame_data;
                     11'd33: ip_dst_r[7:0]   <= frame_data;
-                    // ARP sender IP（idx 36-39）/ ICMP id（idx 38-39）
-                    11'd36: arp_sip_r[31:24] <= frame_data;
-                    11'd37: arp_sip_r[23:16] <= frame_data;
-                    11'd38: begin arp_sip_r[15:8] <= frame_data; icmp_id_r[15:8] <= frame_data; end
-                    11'd39: begin arp_sip_r[7:0]  <= frame_data; icmp_id_r[7:0]  <= frame_data; end
-                    // ARP target IP（idx 46-49）
-                    11'd46: arp_tip_r[31:24] <= frame_data;
-                    11'd47: arp_tip_r[23:16] <= frame_data;
-                    11'd48: arp_tip_r[15:8]  <= frame_data;
-                    11'd49: arp_tip_r[7:0]   <= frame_data;
                     // ICMP type（idx 34）
                     11'd34: icmp_type_r <= frame_data;
-                    // ICMP seq（idx 40-41）
-                    11'd40: icmp_seq_r[15:8] <= frame_data;
-                    11'd41: icmp_seq_r[7:0]  <= frame_data;
+                    // ARP target IP（idx 38-41；偏移 24-27）/ ICMP id（idx 38-39）
+                    11'd38: begin arp_tip_r[31:24] <= frame_data; icmp_id_r[15:8] <= frame_data; end
+                    11'd39: begin arp_tip_r[23:16] <= frame_data; icmp_id_r[7:0]  <= frame_data; end
+                    // ARP target IP 低两字节 / ICMP seq（idx 40-41）
+                    11'd40: begin arp_tip_r[15:8]  <= frame_data; icmp_seq_r[15:8] <= frame_data; end
+                    11'd41: begin arp_tip_r[7:0]   <= frame_data; icmp_seq_r[7:0]  <= frame_data; end
                     default: ;
                 endcase
             end
