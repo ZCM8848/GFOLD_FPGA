@@ -156,7 +156,9 @@ module rx_proto #(
                     icmp_data_len<=(ip_total_r>=16'd28)?(ip_total_r[6:0]-7'd28):7'd0;
                 end
                 if (udp_match) begin
-                    udp_cmd_req<=1; udp_sender_mac<=sa_mac; udp_sender_ip<=ip_src_r;
+                    // DUMP(0x07) 不触发通用 ACK，只走 dump_req → dump_tx
+                    if (app_type_r != 8'h07) udp_cmd_req<=1;
+                    udp_sender_mac<=sa_mac; udp_sender_ip<=ip_src_r;
                     udp_src_port<=udp_src_port_r; udp_app_type<=app_type_r; udp_app_seq<=app_seq_r;
                     if (app_type_r==8'h01) word_cnt<=word_cnt+{16'd0,app_nwords_r};
                     if (app_type_r==8'h03) begin

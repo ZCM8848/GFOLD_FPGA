@@ -130,7 +130,10 @@ module dump_tx #(
                         st <= S_RWAIT;
                     end
                 end
-                S_RWAIT: st <= S_READ;
+                S_RWAIT: begin
+                    ram_raddr <= dump_start + 10'd1;
+                    st <= S_READ;
+                end
                 S_READ: begin
                     // 每拍读一个字（raddr 已设好，rdata 下一拍有效）
                     dbuf[rd_idx] <= ram_rdata;
@@ -140,7 +143,7 @@ module dump_tx #(
                         crc_init <= 1;
                     end else begin
                         rd_idx <= rd_idx + 1;
-                        ram_raddr <= dump_start + rd_idx + 1;
+                        ram_raddr <= dump_start + {6'd0, rd_idx} + 10'd2;
                     end
                 end
                 S_TX: begin
