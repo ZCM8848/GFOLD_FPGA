@@ -21,7 +21,13 @@ module banded_ldl_fp64_rt #(parameter N = 8, HB = 2,
     output reg  [63:0] zx_out,
     output reg         zx_valid,
     output reg         done,
-    output reg  [7:0]  status
+    output reg  [7:0]  status,
+    // Pool channels
+    output wire [63:0] mul_a, mul_b,
+    input  wire [63:0] mul_o,
+    output wire [63:0] add_a, add_b,
+    output reg         add_sub,
+    input  wire [63:0] add_o
 );
     initial begin
         $readmemh(BAND_FILE, B);
@@ -32,12 +38,8 @@ module banded_ldl_fp64_rt #(parameter N = 8, HB = 2,
     reg [63:0] x   [0:N-1];
     reg [63:0] zx  [0:N-1];
 
-    // fp64 units
-    wire [63:0] mul_a, mul_b, mul_o;
-    fp64_mul um(mul_a, mul_b, mul_o);
-    wire [63:0] add_a, add_b, add_o;
-    reg add_sub;
-    fp64_add ua(add_a, add_b, add_sub, add_o);
+    // fp64 units removed — via pool ports
+    // mul_a/mul_b/add_a/add_b/add_sub/add_o are port wires
     reg div_start;
     reg [63:0] div_a, div_b;
     wire div_done;

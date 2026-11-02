@@ -25,7 +25,11 @@ module proj_dual_cone_rb #(parameter M = 2107,
     output reg  [63:0]      wdata,
     output reg              we,
     input  wire [63:0]      rdata,
-    output reg              done
+    output reg              done,
+    // Pool channel (1 add only)
+    output wire [63:0]  add0_a, add0_b,
+    output wire         add0_sub,
+    input  wire [63:0]  add0_o
 );
     localparam NSOC = NS4 + NS3;     // soc blocks per node
 
@@ -45,7 +49,8 @@ module proj_dual_cone_rb #(parameter M = 2107,
     wire [63:0] po_mux  = ps_out[j*64 +: 64];
     wire [63:0] xblk_mux = xblk_bus[j*64 +: 64];
     wire [63:0] oadd_w;
-    fp64_add uadd(po_mux, xblk_mux, 1'b0, oadd_w);
+    assign add0_a = po_mux; assign add0_b = xblk_mux; assign add0_sub = 1'b0;
+    assign oadd_w = add0_o;
 
     reg [31:0] row;       // row pointer
     reg [31:0] b;         // SOC block index within node
