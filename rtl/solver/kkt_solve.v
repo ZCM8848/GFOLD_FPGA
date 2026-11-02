@@ -72,7 +72,17 @@ module kkt_solve #(
     input  wire          sp2_sram_busy,
     input  wire [63:0]   sp2_sram_rdata,
     // ---- LDL band ready (back-pressure to the upstream band streamer) ----
-    output wire           band_ready
+    output wire           band_ready,
+    // Pool channels (muxed to own/spmv1/spmv2/ldl internally)
+    output wire [63:0]  mul0_a, mul0_b,
+    input  wire [63:0]  mul0_o,
+    output wire [63:0]  add0_a, add0_b,
+    output wire         add0_sub,
+    input  wire [63:0]  add0_o,
+    output wire         div_start,
+    output wire [63:0] div_a, div_b,
+    input  wire         div_done,
+    input  wire [63:0] div_o
 );
     localparam LMAX = (N > M) ? N : M;
     localparam AD_ATVY = LMAX;          // spmv1 out region (A^T vy, N words)
@@ -106,7 +116,9 @@ module kkt_solve #(
         .ram_addr(sp1_addr), .ram_wdata(sp1_wdata), .ram_we(sp1_we),
         .ram_rdata(ram_rdata), .out_out(), .o_valid(), .done(sp1_done_w),
         .sram_req(sp1_sram_req), .sram_we(sp1_sram_we), .sram_waddr(sp1_sram_waddr),
-        .sram_wdata(sp1_sram_wdata), .sram_busy(sp1_sram_busy), .sram_rdata(sp1_sram_rdata));
+        .sram_wdata(sp1_sram_wdata), .sram_busy(sp1_sram_busy), .sram_rdata(sp1_sram_rdata),
+    .mul0_a(sp1_m0a), .mul0_b(sp1_m0b), .mul0_o(sp1_m0o),
+    .add0_a(sp1_a0a), .add0_b(sp1_a0b), .add0_sub(sp1_a0s), .add0_o(sp1_a0o));
 
     wire [12:0] sp2_addr;
     wire [63:0] sp2_wdata;
@@ -119,7 +131,9 @@ module kkt_solve #(
         .ram_addr(sp2_addr), .ram_wdata(sp2_wdata), .ram_we(sp2_we),
         .ram_rdata(ram_rdata), .out_out(), .o_valid(), .done(sp2_done_w),
         .sram_req(sp2_sram_req), .sram_we(sp2_sram_we), .sram_waddr(sp2_sram_waddr),
-        .sram_wdata(sp2_sram_wdata), .sram_busy(sp2_sram_busy), .sram_rdata(sp2_sram_rdata));
+        .sram_wdata(sp2_sram_wdata), .sram_busy(sp2_sram_busy), .sram_rdata(sp2_sram_rdata),
+    .mul0_a(sp2_m0a), .mul0_b(sp2_m0b), .mul0_o(sp2_m0o),
+    .add0_a(sp2_a0a), .add0_b(sp2_a0b), .add0_sub(sp2_a0s), .add0_o(sp2_a0o));
 
     reg  ldl_start, ldl_band_valid, ldl_rhs_valid;
     reg  [63:0] ldl_band_in, ldl_rhs_in;
@@ -132,21 +146,52 @@ module kkt_solve #(
         .rhs_in(ldl_rhs_in), .rhs_valid(ldl_rhs_valid), .rhs_ready(ldl_rhs_ready_w),
         .zx_out(ldl_zx_out), .zx_valid(ldl_zx_valid), .done(ldl_done_w), .status(),
         .sram_req(ldl_sram_req), .sram_we(ldl_sram_we), .sram_waddr(ldl_sram_waddr),
-        .sram_wdata(ldl_sram_wdata), .sram_busy(ldl_sram_busy), .sram_rdata(ldl_sram_rdata));
+        .sram_wdata(ldl_sram_wdata), .sram_busy(ldl_sram_busy), .sram_rdata(ldl_sram_rdata),
+        .mul_a(ldl_ma), .mul_b(ldl_mb), .mul_o(ldl_mo),
+        .add_a(ldl_aa), .add_b(ldl_ab), .add_sub(ldl_asub), .add_o(ldl_ao),
+        .div_start(ldl_ds), .div_a(ldl_da), .div_b(ldl_db), .div_done(ldl_ddone), .div_o(ldl_do));
     assign band_ready = ldl_band_ready_w;   // back-pressure to the band streamer
 
-    // ---- own FP64 arithmetic (combinational units, spmv pattern) ----
-    // rhs_x = rho_x*vx - A^T vy  (pipelined: 1 fp64 op per cycle)
+    // ---- own FP64 arithmetic via pool (rhs + zy, sequential) ----
     reg [63:0] vx_i, atvy_i, po_rhs_r;
-    wire [63:0] po_rhs, so_rhs;
-    fp64_mul um_rhs(vx_i, RHO_X, po_rhs);
-    fp64_add ua_rhs(po_rhs_r, atvy_i, 1'b1, so_rhs);
-    // zy = Dy * (az + r_y*vy)    (pipelined: 1 fp64 op per cycle to meet 50MHz)
     reg [63:0] az_r, vy_r, ry_reg, dy_reg, zy1_r, zy2_r;
-    wire [63:0] po_zy1, so_zy1, po_zy2;
-    fp64_mul um_zy1(ry_reg, vy_r, po_zy1);        // r_y*vy        (cycle 1)
-    fp64_add ua_zy1(az_r, zy1_r, 1'b0, so_zy1);   // az + r_y*vy   (cycle 2)
-    fp64_mul um_zy2(dy_reg, zy2_r, po_zy2);       // Dy*(az+r_y*vy)(cycle 3)
+    // Pool mux: own vs spmv1 vs spmv2 vs ldl
+    wire sp1_own = (st == S_VY || st == S_SP1WAIT);
+    wire sp2_own = (st == S_SP2FEED || st == S_SP2WAIT);
+    wire own_arith = (st==S_RHS0||st==S_RHS1||st==S_RHS1R||st==S_RHS2||st==S_RHS2R||
+                      st==S_RHS3||st==S_RHS3b||st==S_ZY0||st==S_ZY1||st==S_ZY1R||
+                      st==S_ZY2||st==S_ZY2R||st==S_ZY3||st==S_ZY3b||st==S_ZY4);
+    // Sub-module pool wires
+    wire [63:0] sp1_m0a, sp1_m0b, sp1_m0o, sp1_a0a, sp1_a0b, sp1_a0o; wire sp1_a0s;
+    wire [63:0] sp2_m0a, sp2_m0b, sp2_m0o, sp2_a0a, sp2_a0b, sp2_a0o; wire sp2_a0s;
+    wire [63:0] ldl_ma, ldl_mb, ldl_mo, ldl_aa, ldl_ab, ldl_ao; wire ldl_asub;
+    wire ldl_ds; wire [63:0] ldl_da, ldl_db, ldl_do; wire ldl_ddone;
+    // Mux operands to pool
+    assign mul0_a = own_arith ? pa_own : sp1_own ? sp1_m0a : sp2_own ? sp2_m0a : ldl_ma;
+    assign mul0_b = own_arith ? pb_own : sp1_own ? sp1_m0b : sp2_own ? sp2_m0b : ldl_mb;
+    assign add0_a = own_arith ? sa_own : sp1_own ? sp1_a0a : sp2_own ? sp2_a0a : ldl_aa;
+    assign add0_b = own_arith ? sb_own : sp1_own ? sp1_a0b : sp2_own ? sp2_a0b : ldl_ab;
+    assign add0_sub = own_arith ? ss_own : sp1_own ? sp1_a0s : sp2_own ? sp2_a0s : ldl_asub;
+    assign div_start = ldl_ds; assign div_a = ldl_da; assign div_b = ldl_db;
+    // Broadcast results to all consumers
+    assign sp1_m0o = mul0_o; assign sp2_m0o = mul0_o; assign ldl_mo = mul0_o;
+    assign sp1_a0o = add0_o; assign sp2_a0o = add0_o; assign ldl_ao = add0_o;
+    assign ldl_ddone = div_done; assign ldl_do = div_o;
+    // Own arithmetic operand mux (by state)
+    reg [63:0] pa_own, pb_own, sa_own, sb_own; reg ss_own;
+    always @(*) begin
+        pa_own=0; pb_own=0; sa_own=0; sb_own=0; ss_own=0;
+        case (st)
+        S_RHS0: begin pa_own=vx_i; pb_own=RHO_X; end                    // rho_x*vx
+        S_RHS1: begin sa_own=po_rhs_r; sb_own=atvy_i; ss_own=1; end      // po_rhs_r - atvy
+        S_ZY0: begin pa_own=ry_reg; pb_own=vy_r; end                     // r_y*vy
+        S_ZY1: begin sa_own=az_r; sb_own=zy1_r; ss_own=0; end            // az+r_y*vy
+        S_ZY2: begin pa_own=dy_reg; pb_own=zy2_r; end                    // Dy*(az+r_y*vy)
+        default: ;
+        endcase
+    end
+    wire [63:0] po_rhs = mul0_o, so_rhs = add0_o;
+    wire [63:0] po_zy1 = mul0_o, so_zy1 = add0_o, po_zy2 = mul0_o;
 
     // ---- RAM port mux: spmv1 (BASE1=0) | spmv2 (BASE2=2*LMAX) | own ----
     localparam S_IDLE=0, S_BAND=1, S_VX=2, S_VXW=3, S_VY=4,
