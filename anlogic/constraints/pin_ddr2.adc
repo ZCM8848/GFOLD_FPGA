@@ -1,0 +1,5 @@
+set_pin_assignment { I_sys_clk } { LOCATION = C4;  IOSTANDARD = LVCMOS33; PULLTYPE = PULLUP; }
+set_pin_assignment { O_led[0] }  { LOCATION = D10; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; }
+set_pin_assignment { O_led[1] }  { LOCATION = E10; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; }
+set_pin_assignment { O_led[2] }  { LOCATION = C6;  IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; }
+set_pin_assignment { O_led[3] }  { LOCATION = D6;  IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 8; }
