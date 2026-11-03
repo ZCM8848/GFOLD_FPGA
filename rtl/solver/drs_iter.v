@@ -38,6 +38,7 @@ module drs_iter #(
     ,parameter SCALE_EN = 1   // 0: omit adaptive-scale datapath (s_build + 2 spmv)
     ,parameter EXT_WS = 0     // 1: CB/DY workspace lives in external DDR2; BAND stays on-chip
     ,parameter EXT_COEF = 0   // 1: kkt_solve reads r_y/D_y from external SRAM
+    ,parameter MEM_IF = 0     // 1: expose the external SRAM handshake instead of pins
     ,parameter RY_FILE = "../data/kkt/full/r_y_r.hex",
     parameter DY_FILE = "../data/kkt/full/Dy_r.hex"
     ,parameter NODE = 100, Z0 = 14, ZP = 7, NP = 3
@@ -72,6 +73,12 @@ module drs_iter #(
     output wire [19:0]       SRAM_ADDR,
     inout  wire [15:0]       SRAM_DQ,
     output wire              SRAM_CE_N, SRAM_OE_N, SRAM_WE_N, SRAM_UB_N, SRAM_LB_N,
+    // ---- external memory handshake (MEM_IF=1: DDR2 adapter) ----
+    output wire              mem_req, mem_we,
+    output wire [17:0]       mem_waddr,
+    output wire [63:0]       mem_wdata,
+    input  wire              mem_busy,
+    input  wire [63:0]       mem_rdata,
     // ---- CFI Flash (boot: solver input burned in at power-up) ----
     output wire [22:0]       FL_ADDR,
     inout  wire [7:0]        FL_DQ,
@@ -456,11 +463,26 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     assign saty_sram_busy   = sram_busy; assign saty_sram_rdata   = sram_rdata;
     assign sax_sram_busy    = sram_busy; assign sax_sram_rdata    = sram_rdata;
     assign band_ready = (st == S_KSBAND) && ks_band_ready;
-    sram64_ctrl #(.AW(SRAM_AW)) u_sram(.clk(clk), .rst_n(rst_n), .req(sram_req), .we(sram_we),
-        .waddr(sram_waddr), .wdata(sram_wdata), .busy(sram_busy), .rdata(sram_rdata),
-        .SRAM_ADDR(SRAM_ADDR), .SRAM_DQ(SRAM_DQ), .SRAM_CE_N(SRAM_CE_N),
-        .SRAM_OE_N(SRAM_OE_N), .SRAM_WE_N(SRAM_WE_N), .SRAM_UB_N(SRAM_UB_N),
-        .SRAM_LB_N(SRAM_LB_N));
+    generate if (MEM_IF) begin : g_mem_if
+        assign mem_req   = sram_req;
+        assign mem_we    = sram_we;
+        assign mem_waddr = sram_waddr;
+        assign mem_wdata = sram_wdata;
+        assign sram_busy  = mem_busy;
+        assign sram_rdata = mem_rdata;
+        assign SRAM_ADDR = 20'd0;
+        assign SRAM_CE_N = 1'b1; assign SRAM_OE_N = 1'b1; assign SRAM_WE_N = 1'b1;
+        assign SRAM_UB_N = 1'b1; assign SRAM_LB_N = 1'b1;
+        assign SRAM_DQ = 16'hz;
+    end else begin : g_sram_pins
+        sram64_ctrl #(.AW(SRAM_AW)) u_sram(.clk(clk), .rst_n(rst_n), .req(sram_req), .we(sram_we),
+            .waddr(sram_waddr), .wdata(sram_wdata), .busy(sram_busy), .rdata(sram_rdata),
+            .SRAM_ADDR(SRAM_ADDR), .SRAM_DQ(SRAM_DQ), .SRAM_CE_N(SRAM_CE_N),
+            .SRAM_OE_N(SRAM_OE_N), .SRAM_WE_N(SRAM_WE_N), .SRAM_UB_N(SRAM_UB_N),
+            .SRAM_LB_N(SRAM_LB_N));
+        assign mem_req = 1'b0; assign mem_we = 1'b0;
+        assign mem_waddr = 18'd0; assign mem_wdata = 64'd0;
+    end endgenerate
     // ---- Boot memory: CFI Flash controller (BOOT_EXT=0) or external
     // boot-memory port (BOOT_EXT=1, e.g. on-chip image RAM for the PH1P35
     // small-problem demo). Both present the same req/busy/ready/rdata timing.

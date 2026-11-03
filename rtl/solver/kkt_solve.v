@@ -297,14 +297,14 @@ module kkt_solve #(
             // ---- stream M r_y + M D_y words (scale change: refresh zy's D_y/r_y) ----
             S_DYRY: begin
                 if (ry_valid) begin
-                    r_y_arr[wp] <= ry_in;
+                    if (!EXT_COEF) r_y_arr[wp] <= ry_in;
                     if (wp + 1 >= M) begin wp <= 0; st <= S_DYDY; end
                     else wp <= wp + 1;
                 end
             end
             S_DYDY: begin
                 if (dy_valid) begin
-                    Dy_arr[wp] <= dy_in;
+                    if (!EXT_COEF) Dy_arr[wp] <= dy_in;
                     if (wp + 1 >= M) begin
                         wp <= 0;
                         st <= S_VX;   // band pre-loaded into LDL SRAM; never streamed
