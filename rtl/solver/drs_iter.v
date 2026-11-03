@@ -19,7 +19,7 @@
 //
 // WRITE-ADDRESS DISCIPLINE (hit + fixed): every element loop that writes RAM
 // ends in a write state (own_addr<=DEST+i, we<=1) followed by a PURE ADVANCE
-// state (no own_addr assignment) — the write lands on the advance state's
+// state (no own_addr assignment) �?the write lands on the advance state's
 // posedge using the write address. Assigning the next READ address in the
 // write state (or jumping straight into a read state) overwrites the write
 // address before the write lands -> data written to the wrong region (the
@@ -32,7 +32,14 @@ module drs_iter #(
     parameter SQRT_L = 64'h404c51d19a043914,   // sqrt(L), L=3208
     parameter AROW_FILE = "../data/kkt/full/Arow.hex",
     parameter ACOL_FILE = "../data/kkt/full/Acol.hex",
-    parameter AVAL_FILE = "../data/kkt/full/Aval.hex"
+    parameter AVAL_FILE = "../data/kkt/full/Aval.hex",
+    parameter BOOT_EXT = 0   // 0: on-chip CFI flash controller; 1: external boot-memory port
+    ,parameter SRAM_AW = 18   // external SRAM word-address width (18 = 2MB; 12 = on-chip demo)
+    ,parameter RY_FILE = "../data/kkt/full/r_y_r.hex",
+    parameter DY_FILE = "../data/kkt/full/Dy_r.hex"
+    ,parameter NODE = 100, Z0 = 14, ZP = 7, NP = 3
+    ,parameter NS4 = 2, DIM4 = 4, NS3 = 1, DIM3 = 3
+    ,parameter TAIL_NN = 1, TAIL_Z = 6
 )(
     input  wire              clk, rst_n, start,
     input  wire              refactor,        // 1: stream band + re-factorize
@@ -52,6 +59,7 @@ module drs_iter #(
     output wire              kkt_we,
     input  wire [63:0]       kkt_rdata,
     output reg               done,
+    output wire              idle,             // high in S_IDLE (boot done / iteration complete)
     output reg  [3:0]        verb,            // current FSM phase (AGC-style VERB)
     output wire [63:0]       scale_cur_out,   // adaptive scale (for display)
     output wire [63:0]       tau_out,         // root_plus tau (for display)
@@ -66,7 +74,13 @@ module drs_iter #(
     inout  wire [7:0]        FL_DQ,
     output wire              FL_CE_N, FL_OE_N, FL_WE_N,
     output wire              FL_RESET_N, FL_WP_N,
-    input  wire              FL_RY
+    input  wire              FL_RY,
+    // ---- external boot memory (used when BOOT_EXT=1) ----
+    output wire              boot_req,
+    output wire [19:0]       boot_waddr,
+    input  wire [63:0]       boot_rdata,
+    input  wire              boot_busy,
+    input  wire              boot_ready
 );
     localparam V_BASE  = 0;
     localparam LMAX = (N > M) ? N : M;             // = M for the G-FOLD problem
@@ -82,13 +96,15 @@ module drs_iter #(
     localparam ZMASK_BASE = DY_BASE;  // boot zmask data shares DY area (loaded to reg bits at reset)
     localparam COO_BASE = 0;                       // packed COO in SRAM (word[2k]={Acol,Arow}, word[2k+1]=Aval)
     localparam AA_BASE   = 4*L + 3*L*10;           // LDL array base in SRAM (109072); s_build writes band here
-    // ---- Flash segment base (64-bit word addr; see gen_flash_image.py manifest) ----
+    // ---- Boot image segment bases/lengths (derived from the problem size, so
+    // the same RTL works for the full G-FOLD instance and the small on-chip
+    // demo). Word addresses; layout: COO | c | nb | zmask | band | g.
     localparam FL_COO_W = 20'd0;                   // COO segment
-    localparam FL_C_W   = 20'd9566;                // c segment (0x255E)
-    localparam FL_NB_W  = 20'd10666;               // nb segment (0x29AA)
-    localparam FL_ZM_W  = 20'd12773;               // zmask segment (0x31E5)
-    localparam FL_BAND_W= 20'd14880;               // band segment (0x3A20)
-    localparam FL_G_W   = 20'd34680;               // g segment (0x8778)
+    localparam FL_C_W   = FL_COO_W + 2*NNZ;        // c segment
+    localparam FL_NB_W  = FL_C_W + N;              // nb segment
+    localparam FL_ZM_W  = FL_NB_W + M;             // zmask segment
+    localparam FL_BAND_W= FL_ZM_W + M;             // band segment
+    localparam FL_G_W   = FL_BAND_W + (HB+1)*N;    // g segment
     // spmv workspace for the adaptive-scale residual: reused for A^Ty then Ax.
     // needs LMAX + LMAX words (spmv x@[0,LENX) + out@[LMAX,LMAX+LENO)).
     localparam NM_B = 64'h40A2C00000000000;  // max|b| = 2400.0 (reordered frame)
@@ -147,6 +163,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     S_W41=250, S_W42=251, S_W43=252, S_W44=253, S_W45=254, S_W46=255,S_W47=257,S_W48=258,S_W49=259,S_W50=260,S_W51=261,S_W52=262,S_W53=263,S_W54=264,S_W55=265,S_W56=266,S_W57=267,S_W58=268,S_W59=269,S_W60=270,S_W61=271,S_W62=272,S_W63=273,S_W64=274,S_W65=275,S_W66=276,S_W67=277,S_W68=278,S_W69=279,S_W70=280,S_W71=281,S_W72=282,S_W73=283,S_W74=284,S_W75=285,S_W76=286,S_W77=287,S_W78=288,S_W79=289,S_W80=290,S_W81=291,S_W82=292,S_W83=293,    S_W84=294, S_W85=295, S_GKSBH=296,
     S_BOOT_WAIT=297, S_BOOT_F=298, S_BOOT_FW=299, S_BOOT_W=300, S_BOOT_WW=301, S_BOOT_V0=302, S_BOOT_DR=303;
     reg [8:0] st;   // 0..261 fits in 9 bits (sync-read waits S_W1..W46)
+    assign idle = (st == S_IDLE);
     // force refactor=1 during a scale-update g recompute (band comes from s_build)
     reg gks_active;
     wire ks_refactor = refactor || gks_active;
@@ -172,7 +189,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     wire band_valid_rise = band_valid && !band_valid_p;   // one sample per tb word
     kkt_solve #(.N(N), .M(M), .NNZ(NNZ), .HB(HB),
                 .AA_BASE(AA_BASE), .COO_BASE(COO_BASE),
-                .RY_FILE("../data/kkt/full/r_y_r.hex"), .DY_FILE("../data/kkt/full/Dy_r.hex")) u_ks(
+                .RY_FILE(RY_FILE), .DY_FILE(DY_FILE)) u_ks(
         .clk(clk), .rst_n(rst_n), .start(ks_start),
         .band_in(ks_band_in), .band_valid(ks_band_valid), .refactor(ks_refactor),
         .par_update(ks_par_update), .ry_in(ks_ry_in), .dy_in(ks_dy_in),
@@ -246,14 +263,14 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
         .r_in(rp_r), .g_in(rp_g), .p_in(rp_p), .mu_in(rp_mu), .din_valid(rp_dv),
         .eta(rp_eta), .done(rp_done), .tau(rp_tau),
         .mul0_a(rp_m0a), .mul0_b(rp_m0b), .mul1_a(rp_m1a), .mul1_b(rp_m1b),
-        .mul2_a(rp_m2a), .mul2_b(rp_m2b), .mul3_a(rp_m3a), .mul3_b(rp_m3b),
-        .mul0_o(pm0_o), .mul1_o(pm1_o), .mul2_o(pm2_o), .mul3_o(pm3_o),
+        .mul2_a(rp_m2a), .mul2_b(rp_m2b),
+        .mul0_o(pm0_o), .mul1_o(pm1_o), .mul2_o(pm2_o),
         .add0_a(rp_a0a), .add0_b(rp_a0b), .add0_sub(rp_a0s),
         .add1_a(rp_a1a), .add1_b(rp_a1b), .add1_sub(rp_a1s),
         .add2_a(rp_a2a), .add2_b(rp_a2b), .add2_sub(rp_a2s),
-        .add3_a(rp_a3a), .add3_b(rp_a3b), .add3_sub(rp_a3s),
-        .add4_a(rp_a4a), .add4_b(rp_a4b), .add4_sub(rp_a4s),
-        .add0_o(pa0_o), .add1_o(pa1_o), .add2_o(pa2_o), .add3_o(pa3_o), .add4_o(pa4_o),
+
+
+        .add0_o(pa0_o), .add1_o(pa1_o), .add2_o(pa2_o),
         .div_start(rp_div_start), .div_a(rp_div_a), .div_b(rp_div_b),
         .div_done(pdiv_done), .div_o(pdiv_o),
         .rr_start(rp_rr_start), .rr_in(rp_rr_in),
@@ -265,7 +282,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     wire pdc_we;
     wire [63:0] pdc_rdata;
     wire pdc_done;
-    proj_dual_cone_rb u_pdc(.clk(clk), .rst_n(rst_n), .start(pdc_start),
+    proj_dual_cone_rb #(.M(M), .NODE(NODE), .Z0(Z0), .ZP(ZP), .NP(NP), .NS4(NS4), .DIM4(DIM4), .NS3(NS3), .DIM3(DIM3), .TAIL_NN(TAIL_NN), .TAIL_Z(TAIL_Z)) u_pdc(.clk(clk), .rst_n(rst_n), .start(pdc_start),
         .addr(pdc_addr), .wdata(pdc_wdata), .we(pdc_we), .rdata(pdc_rdata),
         .done(pdc_done),
         .add0_a(pdc_a0a), .add0_b(pdc_a0b), .add0_sub(pdc_a0s), .add0_o(pa0_o),
@@ -314,17 +331,29 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     assign saty_sram_busy   = sram_busy; assign saty_sram_rdata   = sram_rdata;
     assign sax_sram_busy    = sram_busy; assign sax_sram_rdata    = sram_rdata;
     assign band_ready = (st == S_KSBAND) && ks_band_ready;
-    sram64_ctrl #(.AW(18)) u_sram(.clk(clk), .rst_n(rst_n), .req(sram_req), .we(sram_we),
+    sram64_ctrl #(.AW(SRAM_AW)) u_sram(.clk(clk), .rst_n(rst_n), .req(sram_req), .we(sram_we),
         .waddr(sram_waddr), .wdata(sram_wdata), .busy(sram_busy), .rdata(sram_rdata),
         .SRAM_ADDR(SRAM_ADDR), .SRAM_DQ(SRAM_DQ), .SRAM_CE_N(SRAM_CE_N),
         .SRAM_OE_N(SRAM_OE_N), .SRAM_WE_N(SRAM_WE_N), .SRAM_UB_N(SRAM_UB_N),
         .SRAM_LB_N(SRAM_LB_N));
-    // ---- CFI Flash (boot: solver input burned in at power-up) ----
+    // ---- Boot memory: CFI Flash controller (BOOT_EXT=0) or external
+    // boot-memory port (BOOT_EXT=1, e.g. on-chip image RAM for the PH1P35
+    // small-problem demo). Both present the same req/busy/ready/rdata timing.
     wire flash_busy, flash_ready; wire [63:0] flash_rdata;
-    flash_ctrl #(.AW(20)) u_flash(.clk(clk), .rst_n(rst_n), .req(flash_req), .waddr(flash_waddr),
-        .busy(flash_busy), .ready(flash_ready), .rdata(flash_rdata),
-        .FL_ADDR(FL_ADDR), .FL_DQ(FL_DQ), .FL_CE_N(FL_CE_N), .FL_OE_N(FL_OE_N),
-        .FL_WE_N(FL_WE_N), .FL_RESET_N(FL_RESET_N), .FL_WP_N(FL_WP_N), .FL_RY(FL_RY));
+    generate if (BOOT_EXT) begin : g_ext_boot
+        assign boot_req   = flash_req;
+        assign boot_waddr = flash_waddr;
+        assign flash_rdata = boot_rdata;
+        assign flash_busy  = boot_busy;
+        assign flash_ready = boot_ready;
+    end else begin : g_flash_boot
+        flash_ctrl #(.AW(20)) u_flash(.clk(clk), .rst_n(rst_n), .req(flash_req), .waddr(flash_waddr),
+            .busy(flash_busy), .ready(flash_ready), .rdata(flash_rdata),
+            .FL_ADDR(FL_ADDR), .FL_DQ(FL_DQ), .FL_CE_N(FL_CE_N), .FL_OE_N(FL_OE_N),
+            .FL_WE_N(FL_WE_N), .FL_RESET_N(FL_RESET_N), .FL_WP_N(FL_WP_N), .FL_RY(FL_RY));
+        assign boot_req = 1'b0;
+        assign boot_waddr = 20'd0;
+    end endgenerate
     // busy falling-edge detects for the boot copy loop
     reg flash_busy_p, sram_busy_p;
     always @(posedge clk or negedge rst_n) begin
@@ -334,9 +363,9 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     wire [19:0] boot_fl_base = (boot_seg == 0) ? FL_COO_W : (boot_seg == 1) ? FL_C_W :
                                (boot_seg == 2) ? FL_NB_W : (boot_seg == 3) ? FL_ZM_W :
                                (boot_seg == 4) ? FL_BAND_W : FL_G_W;
-    wire [15:0] boot_fl_len  = (boot_seg == 0) ? 16'd9566 : (boot_seg == 1) ? 16'd1100 :
-                               (boot_seg == 2) ? 16'd2107 : (boot_seg == 3) ? 16'd2107 :
-                               (boot_seg == 4) ? 16'd19800 : 16'd3207;
+    wire [15:0] boot_fl_len  = (boot_seg == 0) ? (2*NNZ) : (boot_seg == 1) ? N :
+                               (boot_seg == 2) ? M : (boot_seg == 3) ? M :
+                               (boot_seg == 4) ? ((HB+1)*N) : (L-1);
     // FP64 comparison (a > b), combinational, no NaN/denormal handling needed here
     reg  [63:0] cmp_a, cmp_b;
     wire cmp_gt = (cmp_a[63] != cmp_b[63]) ? (~cmp_a[63]) :
@@ -361,12 +390,12 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     wire [63:0] rs_o;
     reg saty_active, sax_active;   // set by the scale-residual FSM while a spmv drives RAM
 
-    // ================= global FP64 pool (4 mul + 5 add + 1 div) =================
-    reg  [63:0] pm0_a, pm0_b, pm1_a, pm1_b, pm2_a, pm2_b, pm3_a, pm3_b;
-    wire [63:0] pm0_o, pm1_o, pm2_o, pm3_o;
-    reg  [63:0] pa0_a, pa0_b, pa1_a, pa1_b, pa2_a, pa2_b, pa3_a, pa3_b, pa4_a, pa4_b;
-    reg         pa0_sub, pa1_sub, pa2_sub, pa3_sub, pa4_sub;
-    wire [63:0] pa0_o, pa1_o, pa2_o, pa3_o, pa4_o;
+    // ================= global FP64 pool (3 mul + 3 add + 1 div) =================
+    reg  [63:0] pm0_a, pm0_b, pm1_a, pm1_b, pm2_a, pm2_b;
+    wire [63:0] pm0_o, pm1_o, pm2_o;
+    reg  [63:0] pa0_a, pa0_b, pa1_a, pa1_b, pa2_a, pa2_b;
+    reg         pa0_sub, pa1_sub, pa2_sub;
+    wire [63:0] pa0_o, pa1_o, pa2_o;
     reg         pdiv_start;
     reg  [63:0] pdiv_a, pdiv_b;
     wire        pdiv_done;
@@ -374,14 +403,12 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
 
     fp64_pool upool(.clk(clk), .rst_n(rst_n),
         .mul0_a(pm0_a), .mul0_b(pm0_b), .mul1_a(pm1_a), .mul1_b(pm1_b),
-        .mul2_a(pm2_a), .mul2_b(pm2_b), .mul3_a(pm3_a), .mul3_b(pm3_b),
-        .mul0_o(pm0_o), .mul1_o(pm1_o), .mul2_o(pm2_o), .mul3_o(pm3_o),
+        .mul2_a(pm2_a), .mul2_b(pm2_b),
+        .mul0_o(pm0_o), .mul1_o(pm1_o), .mul2_o(pm2_o),
         .add0_a(pa0_a), .add0_b(pa0_b), .add0_sub(pa0_sub),
         .add1_a(pa1_a), .add1_b(pa1_b), .add1_sub(pa1_sub),
         .add2_a(pa2_a), .add2_b(pa2_b), .add2_sub(pa2_sub),
-        .add3_a(pa3_a), .add3_b(pa3_b), .add3_sub(pa3_sub),
-        .add4_a(pa4_a), .add4_b(pa4_b), .add4_sub(pa4_sub),
-        .add0_o(pa0_o), .add1_o(pa1_o), .add2_o(pa2_o), .add3_o(pa3_o), .add4_o(pa4_o),
+        .add0_o(pa0_o), .add1_o(pa1_o), .add2_o(pa2_o),
         .div_start(pdiv_start), .div_a(pdiv_a), .div_b(pdiv_b),
         .div_done(pdiv_done), .div_o(pdiv_o));
 
@@ -401,9 +428,9 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     wire        sy_add0_sub;
     wire [63:0] sx_mul0_a, sx_mul0_b, sx_add0_a, sx_add0_b;
     wire        sx_add0_sub;
-    wire [63:0] rp_m0a,rp_m0b,rp_m1a,rp_m1b,rp_m2a,rp_m2b,rp_m3a,rp_m3b;
-    wire [63:0] rp_a0a,rp_a0b,rp_a1a,rp_a1b,rp_a2a,rp_a2b,rp_a3a,rp_a3b,rp_a4a,rp_a4b;
-    wire rp_a0s,rp_a1s,rp_a2s,rp_a3s,rp_a4s;
+    wire [63:0] rp_m0a,rp_m0b,rp_m1a,rp_m1b,rp_m2a,rp_m2b;
+    wire [63:0] rp_a0a,rp_a0b,rp_a1a,rp_a1b,rp_a2a,rp_a2b;
+    wire rp_a0s,rp_a1s,rp_a2s;
     wire rp_div_start; wire [63:0] rp_div_a, rp_div_b;
     wire rp_rr_start; wire [63:0] rp_rr_in;
     wire [63:0] pdc_m0a,pdc_m0b,pdc_m1a,pdc_m1b,pdc_m2a,pdc_m2b;
@@ -431,12 +458,12 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     always @(*) begin
         // default: drs_iter's own arithmetic
         pm0_a=a1; pm0_b=b1; pm1_a=a2; pm1_b=b2; pm2_a=64'h0; pm2_b=64'h0;
-        pm3_a=64'h0; pm3_b=64'h0;
+
         pa0_a=sa; pa0_b=sb; pa0_sub=ssub;
         pa1_a=sc; pa1_b=sd; pa1_sub=ssub2;
         pa2_a=64'h0; pa2_b=64'h0; pa2_sub=1'b0;
-        pa3_a=64'h0; pa3_b=64'h0; pa3_sub=1'b0;
-        pa4_a=64'h0; pa4_b=64'h0; pa4_sub=1'b0;
+
+
         pdiv_start=div_start; pdiv_a=div_a; pdiv_b=div_b;
         srs_start=rs_start; srs_in=rs_in;
 
@@ -447,12 +474,13 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             srs_start=pdc_rr_start; srs_in=pdc_rr_in;
         end else if (rp_active) begin
             pm0_a=rp_m0a; pm0_b=rp_m0b; pm1_a=rp_m1a; pm1_b=rp_m1b;
-            pm2_a=rp_m2a; pm2_b=rp_m2b; pm3_a=rp_m3a; pm3_b=rp_m3b;
+            pm2_a=rp_m2a; pm2_b=rp_m2b;
+
             pa0_a=rp_a0a; pa0_b=rp_a0b; pa0_sub=rp_a0s;
             pa1_a=rp_a1a; pa1_b=rp_a1b; pa1_sub=rp_a1s;
             pa2_a=rp_a2a; pa2_b=rp_a2b; pa2_sub=rp_a2s;
-            pa3_a=rp_a3a; pa3_b=rp_a3b; pa3_sub=rp_a3s;
-            pa4_a=rp_a4a; pa4_b=rp_a4b; pa4_sub=rp_a4s;
+
+
             pdiv_start=rp_div_start; pdiv_a=rp_div_a; pdiv_b=rp_div_b;
             srs_start=rp_rr_start; srs_in=rp_rr_in;
         end else if (ks_active) begin
@@ -680,7 +708,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             S_NM3: begin
                 sa <= sqacc; sb <= po1; ssub <= 0; st <= S_NM4;
             end
-            // sqacc must sample so1 AFTER sa/sb updated (S_NM3) — same-cycle
+            // sqacc must sample so1 AFTER sa/sb updated (S_NM3) �?same-cycle
             // sa<=sqacc + sqacc<=so1 would accumulate every other element.
             S_NM4: begin
                 sqacc <= so1;
@@ -748,7 +776,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             end
             // capture zx(N) + zy(M) -> u_t[0..l-2]  (one per ks_o_valid; write
             // addr updated every cycle, write lands on the NEXT posedge with
-            // the CURRENT cycle's address — correct for a continuous stream)
+            // the CURRENT cycle's address �?correct for a continuous stream)
             S_KSCAP: begin
                 if (ks_o_valid) begin
                     own_addr <= UT_BASE + i; own_wdata <= ks_z_out; own_we <= 1;
@@ -898,7 +926,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                 own_addr <= DR_BASE + N + i; own_wdata <= po1; own_we <= 1; st <= S_SX5;
             end
             S_SX5: begin
-                // write D_y — must be its OWN state: the else-branch ZMASK forward
+                // write D_y �?must be its OWN state: the else-branch ZMASK forward
                 // address would override DY_BASE+i in the same cycle (double assign).
                 own_addr <= DY_BASE + i; own_wdata <= po2; own_we <= 1; st <= S_SX6;
             end
@@ -987,7 +1015,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                 own_addr <= UT_BASE + i; st <= S_W73;
             end
             S_VR2B: begin
-                // div_b must use the fresh vd (vd updates at S_VR2) — one cycle later
+                // div_b must use the fresh vd (vd updates at S_VR2) �?one cycle later
                 div_b <= vd; div_start <= 1; st <= S_VR3;
             end
             S_VR3: begin vu <= ram_rdata; own_addr <= U_BASE + i; st <= S_W74; end

@@ -170,6 +170,70 @@ def cmd_loadtest():
     except: print("  DUMP timeout!")
     sock.close(); return False
 
+def cmd_start():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(('0.0.0.0', PORT))
+    sock.sendto(make_header(0x05, seq=1), (FPGA_IP, PORT))
+    sock.settimeout(2.0)
+    try:
+        data, _ = sock.recvfrom(2048)
+        hdr = parse_header(data)
+        print(f"START ACK type=0x{hdr[1]:02X}" if hdr else "START bad ACK")
+    except socket.timeout:
+        print("START timeout")
+    sock.close()
+
+def _dump_words(sock, start, nwords):
+    sock.sendto(make_header(0x07, nwords=2) + struct.pack('<II', start, nwords), (FPGA_IP, PORT))
+    sock.settimeout(3.0)
+    data, _ = sock.recvfrom(2048)
+    hdr = parse_header(data)
+    if not hdr or hdr[1] != 0x08:
+        raise RuntimeError("no DUMP_DATA")
+    p = data[8:]
+    return [struct.unpack('<Q', p[i*8:(i+1)*8])[0] for i in range(len(p)//8)]
+
+def _d(u):
+    return struct.unpack('>d', struct.pack('>Q', u & 0xFFFFFFFFFFFFFFFF))[0]
+
+def cmd_check(image_path, wait=0.5):
+    if not cmd_load(image_path):
+        print("load failed"); return False
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(('0.0.0.0', PORT))
+    sock.sendto(make_header(0x05, seq=1), (FPGA_IP, PORT))
+    try:
+        sock.settimeout(2.0); sock.recvfrom(2048)
+    except Exception:
+        pass
+    print(f"START sent; waiting {wait}s for boot + 2 iterations...")
+    time.sleep(wait)
+    words = []
+    for base in range(0, 120, 10):
+        try:
+            words += _dump_words(sock, base, 10)
+        except Exception as e:
+            print(f"  dump @{base} failed: {e}"); sock.close(); return False
+    sock.close()
+    if len(words) < 120:
+        print(f"  short dump: {len(words)} words"); return False
+    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "rtl", "data", "kkt", "small2")
+    ok = True
+    for tag, off, gname in (("VS1", 0, "v1"), ("VS2", 60, "v2")):
+        gold = [int(x, 16) for x in open(os.path.join(base, gname + ".hex"))]
+        worst = 0.0
+        bad = 0
+        for i in range(60):
+            a = _d(words[off + i]); b = _d(gold[i])
+            rel = abs(a - b) / max(abs(b), 1e-12)
+            worst = max(worst, rel)
+            if rel > 5e-10:
+                bad += 1
+        print(f"{tag}: worst_rel={worst:.3e} bad={bad}/60 {'PASS' if bad == 0 else 'FAIL'}")
+        ok = ok and (bad == 0)
+    print("SMALL-PROBLEM CHECK:", "PASS" if ok else "FAIL")
+    return ok
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else 'ping'
     if cmd == 'ping':
@@ -184,8 +248,15 @@ def main():
         cmd_dump(s, n)
     elif cmd == 'loadtest':
         sys.exit(0 if cmd_loadtest() else 1)
+    elif cmd == 'start':
+        cmd_start()
+    elif cmd == 'check':
+        p = sys.argv[2] if len(sys.argv) > 2 else os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "rtl", "data", "kkt", "small2", "flash_image.bin")
+        w = float(sys.argv[3]) if len(sys.argv) > 3 else 0.5
+        sys.exit(0 if cmd_check(p, w) else 1)
     else:
-        print("commands: ping [n] | load [path] | dump [start] [n] | loadtest")
+        print("commands: ping [n] | load [path] | dump [start] [n] | loadtest | start | check [image.bin] [wait_s]")
         sys.exit(1)
 
 if __name__ == '__main__':

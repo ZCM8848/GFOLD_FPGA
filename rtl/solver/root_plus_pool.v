@@ -14,15 +14,13 @@ module root_plus #(
 
     // Pool mul channels (组合)
     output reg [63:0] mul0_a, mul0_b, output reg [63:0] mul1_a, mul1_b,
-    output reg [63:0] mul2_a, mul2_b, output reg [63:0] mul3_a, mul3_b,
-    input  wire [63:0] mul0_o, mul1_o, mul2_o, mul3_o,
+    output reg [63:0] mul2_a, mul2_b,
+    input  wire [63:0] mul0_o, mul1_o, mul2_o,
     // Pool add channels (组合)
     output reg [63:0] add0_a, add0_b, output reg add0_sub,
     output reg [63:0] add1_a, add1_b, output reg add1_sub,
     output reg [63:0] add2_a, add2_b, output reg add2_sub,
-    output reg [63:0] add3_a, add3_b, output reg add3_sub,
-    output reg [63:0] add4_a, add4_b, output reg add4_sub,
-    input  wire [63:0] add0_o, add1_o, add2_o, add3_o, add4_o,
+    input  wire [63:0] add0_o, add1_o, add2_o,
     // Pool div (时序)
     output reg         div_start,
     output reg [63:0] div_a, div_b,
@@ -60,14 +58,14 @@ module root_plus #(
     localparam S_IDLE=0, S_ACC_W=1, S_ACC1=2, S_ACC2=3, S_ACC3=4, S_ACC4=5,
                S_W1=6, S_W1b=7, S_W1c=8, S_RAD=9, S_RADb=10, S_RADc=11,
                S_RSQ=12, S_RSQW=13, S_SQ=14, S_SQW=15, S_SQWb=16, S_SQWc=17,
-               S_DIV=18, S_DIVW=19, S_DONE=20;
+               S_DIV=18, S_DIVW=19, S_DONE=20, S_ACC4b=21;
 
     // combinational pool operands
     always @(*) begin
-        mul0_a=0; mul0_b=0; mul1_a=0; mul1_b=0; mul2_a=0; mul2_b=0; mul3_a=0; mul3_b=0;
+        mul0_a=0; mul0_b=0; mul1_a=0; mul1_b=0; mul2_a=0; mul2_b=0;
         add0_a=0; add0_b=0; add0_sub=0; add1_a=0; add1_b=0; add1_sub=0;
-        add2_a=0; add2_b=0; add2_sub=0; add3_a=0; add3_b=0; add3_sub=0;
-        add4_a=0; add4_b=0; add4_sub=0;
+        add2_a=0; add2_b=0; add2_sub=0;
+
         div_start=0; div_a=0; div_b=0; rr_start=0; rr_in=0;
         case (st)
         S_ACC_W: begin
@@ -80,17 +78,20 @@ module root_plus #(
             mul0_a=gr_r;  mul0_b=g_d;    // gg = gr*g
             mul1_a=gr_r;  mul1_b=mu_d;   // mug = gr*mu
             mul2_a=gr_r;  mul2_b=p_d;    // pg = gr*p
-            mul3_a=p2_r;  mul3_b=r_d;    // pp = p2*r
+
         end
         S_ACC3: begin
+            mul1_a=p2_r;  mul1_b=r_d;    // pp = p2*r (was mul3; serialized)
             mul0_a=pmu2_r; mul0_b=r_d;   // pmu = pmu2*r
         end
         S_ACC4: begin
             add0_a=gg;  add0_b=gg_t;  add0_sub=0;  // gg += gg_t
             add1_a=mug; add1_b=mug_t; add1_sub=0;  // mug += mug_t
             add2_a=pg;  add2_b=pg_t;  add2_sub=0;  // pg += pg_t
-            add3_a=pp;  add3_b=pp_t;  add3_sub=0;  // pp += pp_t
-            add4_a=pmu; add4_b=pmu_t; add4_sub=0;  // pmu += pmu_t
+        end
+        S_ACC4b: begin
+            add0_a=pp;  add0_b=pp_t;  add0_sub=0;  // pp += pp_t
+            add1_a=pmu; add1_b=pmu_t; add1_sub=0;  // pmu += pmu_t
         end
         S_W1: begin
             mul0_a=eta;  mul0_b=TAU;                    // et10 = eta*TAU
@@ -169,15 +170,20 @@ module root_plus #(
                 end
             end
             S_ACC2: begin
-                gg_t<=mul0_o; mug_t<=mul1_o; pg_t<=mul2_o; pp_t<=mul3_o;
+                gg_t<=mul0_o; mug_t<=mul1_o; pg_t<=mul2_o;
                 st<=S_ACC3;
             end
             S_ACC3: begin
                 pmu_t<=mul0_o;
+                pp_t<=mul1_o;
                 st<=S_ACC4;
             end
             S_ACC4: begin
-                gg<=add0_o; mug<=add1_o; pg<=add2_o; pp<=add3_o; pmu<=add4_o;
+                gg<=add0_o; mug<=add1_o; pg<=add2_o;
+                st<=S_ACC4b;
+            end
+            S_ACC4b: begin
+                pp<=add0_o; pmu<=add1_o;
                 if (cnt+1>=L) st<=S_W1;
                 else begin cnt<=cnt+1; st<=S_ACC_W; end
             end

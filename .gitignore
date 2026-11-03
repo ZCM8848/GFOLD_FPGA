@@ -134,3 +134,25 @@ anlogic/td_project/phy_1/*.rpt
 rtl/sim/*.vvp
 rtl/sim/pool_sim_output.txt
 rtl/data/pool_sim_dump.txt
+
+# milestone-5 sim/synth intermediates
+rtl/sim/*_sim_output*.txt
+rtl/sim/*_output*.txt
+anlogic/td_project/syn_m5/*.db
+anlogic/td_project/syn_m5/*.area
+anlogic/td_project/syn_m5/*.timing
+anlogic/td_project/syn_m5/*.ts
+anlogic/td_project/syn_m5/*.qor
+anlogic/td_project/syn_m5/*.log
+anlogic/td_project/syn_m5/*.logw
+anlogic/td_project/syn_m5/flow.status
+anlogic/td_project/syn_m5/.*.f
+anlogic/td_project/phy_m5/*.db
+anlogic/td_project/phy_m5/*.rpt
+anlogic/td_project/phy_m5/*.log
+anlogic/td_project/phy_m5/*.logw
+anlogic/td_project/phy_m5/flow.status
+anlogic/td_project/phy_m5/.*.f
+anlogic/td_project/phy_m5/*.bit
+anlogic/td_project/phy_m5/place_flow.status
+anlogic/td_project/phy_m5/route_flow.status

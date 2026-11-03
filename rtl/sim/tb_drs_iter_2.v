@@ -47,7 +47,8 @@ module tb_drs_iter;
         .SRAM_OE_N(sram_oe_n), .SRAM_WE_N(sram_we_n), .SRAM_UB_N(sram_ub_n),
         .SRAM_LB_N(sram_lb_n),
         .FL_ADDR(fl_addr), .FL_DQ(fl_dq), .FL_CE_N(fl_ce_n), .FL_OE_N(fl_oe_n),
-        .FL_WE_N(fl_we_n), .FL_RESET_N(fl_reset_n), .FL_WP_N(fl_wp_n), .FL_RY(fl_ry));
+        .FL_WE_N(fl_we_n), .FL_RESET_N(fl_reset_n), .FL_WP_N(fl_wp_n), .FL_RY(fl_ry),
+        .boot_req(), .boot_waddr(), .boot_rdata(64'h0), .boot_busy(1'b0), .boot_ready(1'b0));
     always @(posedge clk) ram_rdata <= smem[ram_addr];
     always @(posedge clk) if (ram_we) smem[ram_addr] <= ram_wdata;
     always @(posedge clk) kkt_rdata <= kmem[kkt_addr];
