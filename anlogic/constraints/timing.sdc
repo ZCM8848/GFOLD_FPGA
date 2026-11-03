@@ -11,7 +11,12 @@ create_clock -name clk_sol -period 32.000 -waveform {0 16.000} \
     [get_pins {u_bufg_sol/o}]
 
 # PHY 送来的 RGMII RX_CLK（125MHz）
-create_clock -name rgmii_rxc -period 8.000 -waveform {0 4} [get_ports {I_rgmii_rxc}]
+
+create_clock -name rgmii_rxc -period 8.000 -waveform {0 4.000} [get_ports {I_rgmii_rxc}]
+# YT8511 RGMII RX: PHY internal RX_CLK delay strap is enabled; model the
+# data-to-clock delay so the source-synchronous RX is actually constrained.
+set_input_delay -clock rgmii_rxc -max 0.4 [get_ports {I_rgmii_rxd[*] I_rgmii_rx_ctl}]
+set_input_delay -clock rgmii_rxc -min 0.4 [get_ports {I_rgmii_rxd[*] I_rgmii_rx_ctl}]
 
 # 三个时钟域互相异步；跨域只走单比特 toggle 握手
 set_clock_groups -asynchronous \
