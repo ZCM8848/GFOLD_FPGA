@@ -23,9 +23,11 @@ module gfold_m5_top #(
         else sys_rst_n<=1'b1;
     end
 
-    wire clk_125, clk_sol, pll_lock;
-    PLL u_pll(.refclk(I_sys_clk),.clk0_out(clk_125),.clk1_out(clk_sol),
+    wire clk_125, clk_sol_raw, pll_lock;
+    PLL u_pll(.refclk(I_sys_clk),.clk0_out(clk_125),.clk1_out(clk_sol_raw),
               .clk4_out(),.clk5_out(),.lock(pll_lock),.reset(~sys_rst_n));
+    wire clk_sol;
+    PH1P_LOGIC_BUFG u_bufg_sol(.i(clk_sol_raw), .o(clk_sol));
     wire rst_125_n=sys_rst_n&pll_lock, rst_rx_n=sys_rst_n&pll_lock;
 
     wire phy_rst_done;

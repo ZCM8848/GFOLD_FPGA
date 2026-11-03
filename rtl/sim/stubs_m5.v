@@ -19,3 +19,6 @@ module PH1P_LOGIC_HD_ODDR
     (output q, input clk, input d0, input d1, input rst);
     assign q = d0;
 endmodule
+
+module PH1P_LOGIC_BUFG(input i, output o); assign o = i; endmodule
+
