@@ -6,7 +6,7 @@
 // by chaining the validated blocks: 2x spmv_fp64 (A^T and A) + 1x
 // banded_ldl_fp64_rb, orchestrated by this FSM. All arithmetic IEEE-754 FP64.
 // Phase 4a: the S band is now STREAMED IN (band_in/band_valid, (HB+1)*N words)
-// instead of $readmemh — the band can come from s_build at runtime, so the
+// instead of $readmemh �?the band can come from s_build at runtime, so the
 // adaptive-scaling loop can re-factorize with a rebuilt S (new D_y).
 //
 // RAM-port design (proj_dual_cone / spmv pattern): one shared external RAM
@@ -182,11 +182,14 @@ module kkt_solve #(
     always @(*) begin
         pa_own=0; pb_own=0; sa_own=0; sb_own=0; ss_own=0;
         case (st)
-        S_RHS0: begin pa_own=vx_i; pb_own=RHO_X; end                    // rho_x*vx
-        S_RHS1: begin sa_own=po_rhs_r; sb_own=atvy_i; ss_own=1; end      // po_rhs_r - atvy
-        S_ZY0: begin pa_own=ry_reg; pb_own=vy_r; end                     // r_y*vy
-        S_ZY1: begin sa_own=az_r; sb_own=zy1_r; ss_own=0; end            // az+r_y*vy
-        S_ZY2: begin pa_own=dy_reg; pb_own=zy2_r; end                    // Dy*(az+r_y*vy)
+        // NOTE: the original design computes these combinationally and latches
+        // one/two states later, so the operands must be selected in the LATCH
+        // state, not in the earlier read state.
+        S_RHS3: begin pa_own=vx_i; pb_own=RHO_X; end                 // latch rho_x*vx
+        S_RHS3b: begin sa_own=po_rhs_r; sb_own=atvy_i; ss_own=1; end // po_rhs_r - atvy
+        S_ZY3: begin pa_own=ry_reg; pb_own=vy_r; end                 // latch r_y*vy
+        S_ZY3b: begin sa_own=az_r; sb_own=zy1_r; ss_own=0; end       // latch az+r_y*vy
+        S_ZY4: begin pa_own=dy_reg; pb_own=zy2_r; end                // Dy*(az+r_y*vy)
         default: ;
         endcase
     end
@@ -203,8 +206,6 @@ module kkt_solve #(
                S_DYRY=25, S_DYDY=26;
     reg [5:0] st;
     reg [15:0] wp, i, r, zo;
-    wire sp1_own = (st == S_VY || st == S_SP1WAIT);
-    wire sp2_own = (st == S_SP2FEED || st == S_SP2WAIT);
     reg [RAM_AW-1:0] own_addr;
     reg [63:0] own_wdata;
     reg own_we;

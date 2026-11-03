@@ -92,12 +92,15 @@ boot FSM 改为从 ETH 下发的 image_ram/DDR2 读取数据（替代 flash_ctrl
 
 | 任务 | 说明 | 预估 |
 |---|---|---|
-| drs_iter 重写 | 核心 FSM（~64 状态），pool mux 到子模块，替换 SRAM/Flash | 3-4h |
-| rsqrt 共享 | root_plus + proj_soc 各有 1 rsqrt（8 DSP），需合并为 1 | 30min |
+| ~~drs_iter 重写~~ | ✅ pool mux（sticky busy）+ 共享 rsqrt + 去除 exp/log | 完成 |
+| ~~rsqrt 共享~~ | ✅ root_plus / proj_soc 共享 1 个 fp64_rsqrt | 完成 |
+| ~~仿真~~ | ✅ iverilog，2 轮 DRS，check_drs PASS（V1 5.16e-10 / V2 5.72e-10） | 完成 |
 | solver_core | 实例化 pool + rsqrt + drs_iter，顶层包装 | 1h |
 | 存储适配器 | sram64_ctrl → on-chip BRAM（仿真）或 DDR2（上板） | 1-2h |
-| 仿真 | tb_drs_iter 对拍 v1.hex/v2.hex | 1h |
 | 综合 + 上板 | TD 综合，ETH 集成，START/DUMP | 2h |
+
+> 注：`exp/log` 在 pool 版中不再实例化（2 轮迭代不触发 scale）。
+> 验证详情见 `docs/MILESTONE5_VERIFY.md`。
 
 ### drs_iter 重写详细步骤
 

@@ -26,20 +26,40 @@ module proj_dual_cone_rb #(parameter M = 2107,
     output reg              we,
     input  wire [63:0]      rdata,
     output reg              done,
-    // Pool channel (1 add only)
+    // Pool channels: pdc's own output add + the internal proj_soc's 3 mul/1 add
     output wire [63:0]  add0_a, add0_b,
     output wire         add0_sub,
-    input  wire [63:0]  add0_o
+    input  wire [63:0]  add0_o,
+    output wire [63:0]  mul0_a, mul0_b, mul1_a, mul1_b, mul2_a, mul2_b,
+    input  wire [63:0]  mul0_o, mul1_o, mul2_o,
+    // Shared rsqrt (owned by drs_iter)
+    output wire         rr_start,
+    output wire [63:0]  rr_in,
+    input  wire         rr_done,
+    input  wire [63:0]  rr_o
 );
     localparam NSOC = NS4 + NS3;     // soc blocks per node
 
-    // ---- proj_soc #(DIM=4) instance (dim3 handled by zero-padding comp 3) ----
+    // ---- proj_soc_pool #(DIM=4) instance (dim3 handled by zero-padding comp 3) ----
     reg  ps_start;
     wire [255:0] ps_in;
     wire ps_done;
     wire [255:0] ps_out;
-    proj_soc #(.DIM(4)) usoc(.clk(clk), .rst_n(rst_n), .start(ps_start),
-                             .v(ps_in), .done(ps_done), .o(ps_out));
+    wire [63:0] ps_mul0_a, ps_mul0_b, ps_mul1_a, ps_mul1_b, ps_mul2_a, ps_mul2_b;
+    wire [63:0] ps_add0_a, ps_add0_b;
+    wire        ps_add0_sub;
+    wire        ps_rr_start;
+    wire [63:0] ps_rr_in;
+    proj_soc_pool #(.DIM(4)) usoc(.clk(clk), .rst_n(rst_n), .start(ps_start),
+                             .v(ps_in), .done(ps_done), .o(ps_out),
+                             .mul0_a(ps_mul0_a), .mul0_b(ps_mul0_b),
+                             .mul1_a(ps_mul1_a), .mul1_b(ps_mul1_b),
+                             .mul2_a(ps_mul2_a), .mul2_b(ps_mul2_b),
+                             .mul0_o(mul0_o), .mul1_o(mul1_o), .mul2_o(mul2_o),
+                             .add0_a(ps_add0_a), .add0_b(ps_add0_b),
+                             .add0_sub(ps_add0_sub), .add0_o(add0_o),
+                             .rr_start(ps_rr_start), .rr_in(ps_rr_in),
+                             .rr_done(rr_done), .rr_o(rr_o));
     reg [255:0] xblk_bus;          // current SOC block (flattened 4x64)
     reg [1:0]  j;                  // within-block index (0..3)
     wire [63:0] xb0 = xblk_bus[63:0],  xb1 = xblk_bus[127:64],
@@ -49,8 +69,12 @@ module proj_dual_cone_rb #(parameter M = 2107,
     wire [63:0] po_mux  = ps_out[j*64 +: 64];
     wire [63:0] xblk_mux = xblk_bus[j*64 +: 64];
     wire [63:0] oadd_w;
-    assign add0_a = po_mux; assign add0_b = xblk_mux; assign add0_sub = 1'b0;
     assign oadd_w = add0_o;
+    assign rr_start = ps_rr_start;
+    assign rr_in    = ps_rr_in;
+    assign mul0_a = ps_mul0_a; assign mul0_b = ps_mul0_b;
+    assign mul1_a = ps_mul1_a; assign mul1_b = ps_mul1_b;
+    assign mul2_a = ps_mul2_a; assign mul2_b = ps_mul2_b;
 
     reg [31:0] row;       // row pointer
     reg [31:0] b;         // SOC block index within node
@@ -64,6 +88,13 @@ module proj_dual_cone_rb #(parameter M = 2107,
                S_OUT=10, S_OW=11, S_TAIL=12, S_TNRD=13, S_TNRD2=20, S_TNW=14, S_TNWR=15,
                S_TAILZ=16, S_DONE=17;
     reg [4:0] st;
+
+    // pdc's own output add (S_OUT) and proj_soc's add share add0; only one is
+    // active at a time (proj_soc finishes before S_OUT).
+    wire ps_active = (st == S_PROJ) || (st == S_PW) || (st == S_PW2);
+    assign add0_a = ps_active ? ps_add0_a : po_mux;
+    assign add0_b = ps_active ? ps_add0_b : xblk_mux;
+    assign add0_sub = ps_active ? ps_add0_sub : 1'b0;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin

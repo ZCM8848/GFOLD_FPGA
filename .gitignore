@@ -129,3 +129,8 @@ rtl/sim/wlft*
 rtl/sim/sbuild_small_dump.txt
 rtl/sim/drsi_c.txt
 anlogic/td_project/phy_1/*.rpt
+
+# Icarus Verilog sim artifacts (regenerable)
+rtl/sim/*.vvp
+rtl/sim/pool_sim_output.txt
+rtl/data/pool_sim_dump.txt

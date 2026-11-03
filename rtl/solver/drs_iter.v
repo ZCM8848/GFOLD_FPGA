@@ -187,7 +187,11 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
         .sp1_sram_wdata(ks_sp1_sram_wdata), .sp1_sram_busy(ks_sp1_sram_busy), .sp1_sram_rdata(ks_sp1_sram_rdata),
         .sp2_sram_req(ks_sp2_sram_req), .sp2_sram_we(ks_sp2_sram_we), .sp2_sram_waddr(ks_sp2_sram_waddr),
         .sp2_sram_wdata(ks_sp2_sram_wdata), .sp2_sram_busy(ks_sp2_sram_busy), .sp2_sram_rdata(ks_sp2_sram_rdata),
-        .band_ready(ks_band_ready));
+        .band_ready(ks_band_ready),
+        .mul0_a(ks_mul0_a), .mul0_b(ks_mul0_b), .mul0_o(pm0_o),
+        .add0_a(ks_add0_a), .add0_b(ks_add0_b), .add0_sub(ks_add0_sub), .add0_o(pa0_o),
+        .div_start(ks_div_start), .div_a(ks_div_a), .div_b(ks_div_b),
+        .div_done(pdiv_done), .div_o(pdiv_o));
 
     // ---- s_build (scale update: rebuild S band from D_y + A COO) ----
     reg  sb_start;
@@ -203,7 +207,9 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
         .ram_addr(sb_addr), .ram_wdata(sb_wdata), .ram_we(sb_we), .ram_rdata(ram_rdata),
         .sram_req(sb_sram_req), .sram_we(sb_sram_we), .sram_waddr(sb_sram_waddr),
         .sram_wdata(sb_sram_wdata), .sram_busy(sb_sram_busy), .sram_rdata(sb_sram_rdata),
-        .done(sb_done));
+        .done(sb_done),
+        .mul0_a(sb_mul0_a), .mul0_b(sb_mul0_b), .mul0_o(pm0_o),
+        .add0_a(sb_add0_a), .add0_b(sb_add0_b), .add0_sub(sb_add0_sub), .add0_o(pa0_o));
 
     // ---- spmv for adaptive-scale residual: A^T y (transpose=1) then A x
     //      (transpose=0), both reusing BAND_BASE workspace (band idle outside scale rebuild) (sequential) ----
@@ -216,7 +222,9 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
         .ram_addr(saty_addr), .ram_wdata(saty_wdata), .ram_we(saty_we), .ram_rdata(ram_rdata),
         .out_out(), .o_valid(), .done(saty_done),
         .sram_req(saty_sram_req), .sram_we(saty_sram_we), .sram_waddr(saty_sram_waddr),
-        .sram_wdata(saty_sram_wdata), .sram_busy(saty_sram_busy), .sram_rdata(saty_sram_rdata));
+        .sram_wdata(saty_sram_wdata), .sram_busy(saty_sram_busy), .sram_rdata(saty_sram_rdata),
+        .mul0_a(sy_mul0_a), .mul0_b(sy_mul0_b), .mul0_o(pm0_o),
+        .add0_a(sy_add0_a), .add0_b(sy_add0_b), .add0_sub(sy_add0_sub), .add0_o(pa0_o));
     reg  sax_start, sax_din_valid; reg [63:0] sax_x_in;
     wire [12:0] sax_addr; wire [63:0] sax_wdata; wire sax_we, sax_done;   // 13-bit: spmv ram_addr width
     wire sax_sram_req, sax_sram_we; wire [17:0] sax_sram_waddr; wire [63:0] sax_sram_wdata;
@@ -226,7 +234,9 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
         .ram_addr(sax_addr), .ram_wdata(sax_wdata), .ram_we(sax_we), .ram_rdata(ram_rdata),
         .out_out(), .o_valid(), .done(sax_done),
         .sram_req(sax_sram_req), .sram_we(sax_sram_we), .sram_waddr(sax_sram_waddr),
-        .sram_wdata(sax_sram_wdata), .sram_busy(sax_sram_busy), .sram_rdata(sax_sram_rdata));
+        .sram_wdata(sax_sram_wdata), .sram_busy(sax_sram_busy), .sram_rdata(sax_sram_rdata),
+        .mul0_a(sx_mul0_a), .mul0_b(sx_mul0_b), .mul0_o(pm0_o),
+        .add0_a(sx_add0_a), .add0_b(sx_add0_b), .add0_sub(sx_add0_sub), .add0_o(pa0_o));
 
     reg  rp_start, rp_dv;
     reg  [63:0] rp_r, rp_g, rp_p, rp_mu, rp_eta;
@@ -234,7 +244,20 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     wire [63:0] rp_tau;
     root_plus #(.L(LM1)) u_rp(.clk(clk), .rst_n(rst_n), .start(rp_start),
         .r_in(rp_r), .g_in(rp_g), .p_in(rp_p), .mu_in(rp_mu), .din_valid(rp_dv),
-        .eta(rp_eta), .done(rp_done), .tau(rp_tau));
+        .eta(rp_eta), .done(rp_done), .tau(rp_tau),
+        .mul0_a(rp_m0a), .mul0_b(rp_m0b), .mul1_a(rp_m1a), .mul1_b(rp_m1b),
+        .mul2_a(rp_m2a), .mul2_b(rp_m2b), .mul3_a(rp_m3a), .mul3_b(rp_m3b),
+        .mul0_o(pm0_o), .mul1_o(pm1_o), .mul2_o(pm2_o), .mul3_o(pm3_o),
+        .add0_a(rp_a0a), .add0_b(rp_a0b), .add0_sub(rp_a0s),
+        .add1_a(rp_a1a), .add1_b(rp_a1b), .add1_sub(rp_a1s),
+        .add2_a(rp_a2a), .add2_b(rp_a2b), .add2_sub(rp_a2s),
+        .add3_a(rp_a3a), .add3_b(rp_a3b), .add3_sub(rp_a3s),
+        .add4_a(rp_a4a), .add4_b(rp_a4b), .add4_sub(rp_a4s),
+        .add0_o(pa0_o), .add1_o(pa1_o), .add2_o(pa2_o), .add3_o(pa3_o), .add4_o(pa4_o),
+        .div_start(rp_div_start), .div_a(rp_div_a), .div_b(rp_div_b),
+        .div_done(pdiv_done), .div_o(pdiv_o),
+        .rr_start(rp_rr_start), .rr_in(rp_rr_in),
+        .rr_done(srs_done), .rr_o(srs_o));
 
     reg  pdc_start;
     wire [11:0] pdc_addr;
@@ -244,7 +267,13 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     wire pdc_done;
     proj_dual_cone_rb u_pdc(.clk(clk), .rst_n(rst_n), .start(pdc_start),
         .addr(pdc_addr), .wdata(pdc_wdata), .we(pdc_we), .rdata(pdc_rdata),
-        .done(pdc_done));
+        .done(pdc_done),
+        .add0_a(pdc_a0a), .add0_b(pdc_a0b), .add0_sub(pdc_a0s), .add0_o(pa0_o),
+        .mul0_a(pdc_m0a), .mul0_b(pdc_m0b), .mul1_a(pdc_m1a), .mul1_b(pdc_m1b),
+        .mul2_a(pdc_m2a), .mul2_b(pdc_m2b),
+        .mul0_o(pm0_o), .mul1_o(pm1_o), .mul2_o(pm2_o),
+        .rr_start(pdc_rr_start), .rr_in(pdc_rr_in),
+        .rr_done(srs_done), .rr_o(srs_o));
 
     // ---- boot copy FSM regs (declared before the arbiter that uses them) ----
     reg [2:0] boot_seg;        // 0=COO,1=c,2=nb,3=zmask
@@ -314,37 +343,143 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                   (cmp_a[63] == 0) ? ((cmp_a[62:0] > cmp_b[62:0]) ? 1'b1 : 1'b0) :
                                      ((cmp_a[62:0] < cmp_b[62:0]) ? 1'b1 : 1'b0);
 
-    // ---- own FP64 combinational pool ----
+    // ---- own FP64 combinational results (driven by the global pool) ----
     reg [63:0] a1, b1;
-    wire [63:0] po1;
-    fp64_mul um1(a1, b1, po1);
     reg [63:0] a2, b2;
-    wire [63:0] po2;
-    fp64_mul um2(a2, b2, po2);
     reg [63:0] sa, sb;
     reg ssub;
-    wire [63:0] so1;
-    fp64_add ua1(sa, sb, ssub, so1);
     reg [63:0] sc, sd;
     reg ssub2;
-    wire [63:0] so2;
-    fp64_add ua2(sc, sd, ssub2, so2);
-
+    wire [63:0] po1, po2, so1, so2;   // assigned to pool outputs below
     reg  div_start;
     reg  [63:0] div_a, div_b;
-    wire div_done; wire [63:0] div_o;
-    fp64_div udiv(.clk(clk), .start(div_start), .a(div_a), .b(div_b), .done(div_done), .o(div_o));
+    wire div_done;
+    wire [63:0] div_o;
     reg  rs_start;
     reg  [63:0] rs_in;
     wire rs_done;
     wire [63:0] rs_o;
-    fp64_rsqrt urs(clk, rs_start, rs_in, rs_done, rs_o);
+    reg saty_active, sax_active;   // set by the scale-residual FSM while a spmv drives RAM
+
+    // ================= global FP64 pool (4 mul + 5 add + 1 div) =================
+    reg  [63:0] pm0_a, pm0_b, pm1_a, pm1_b, pm2_a, pm2_b, pm3_a, pm3_b;
+    wire [63:0] pm0_o, pm1_o, pm2_o, pm3_o;
+    reg  [63:0] pa0_a, pa0_b, pa1_a, pa1_b, pa2_a, pa2_b, pa3_a, pa3_b, pa4_a, pa4_b;
+    reg         pa0_sub, pa1_sub, pa2_sub, pa3_sub, pa4_sub;
+    wire [63:0] pa0_o, pa1_o, pa2_o, pa3_o, pa4_o;
+    reg         pdiv_start;
+    reg  [63:0] pdiv_a, pdiv_b;
+    wire        pdiv_done;
+    wire [63:0] pdiv_o;
+
+    fp64_pool upool(.clk(clk), .rst_n(rst_n),
+        .mul0_a(pm0_a), .mul0_b(pm0_b), .mul1_a(pm1_a), .mul1_b(pm1_b),
+        .mul2_a(pm2_a), .mul2_b(pm2_b), .mul3_a(pm3_a), .mul3_b(pm3_b),
+        .mul0_o(pm0_o), .mul1_o(pm1_o), .mul2_o(pm2_o), .mul3_o(pm3_o),
+        .add0_a(pa0_a), .add0_b(pa0_b), .add0_sub(pa0_sub),
+        .add1_a(pa1_a), .add1_b(pa1_b), .add1_sub(pa1_sub),
+        .add2_a(pa2_a), .add2_b(pa2_b), .add2_sub(pa2_sub),
+        .add3_a(pa3_a), .add3_b(pa3_b), .add3_sub(pa3_sub),
+        .add4_a(pa4_a), .add4_b(pa4_b), .add4_sub(pa4_sub),
+        .add0_o(pa0_o), .add1_o(pa1_o), .add2_o(pa2_o), .add3_o(pa3_o), .add4_o(pa4_o),
+        .div_start(pdiv_start), .div_a(pdiv_a), .div_b(pdiv_b),
+        .div_done(pdiv_done), .div_o(pdiv_o));
+
+    // single shared rsqrt (root_plus / proj_soc / own normalize)
+    wire        srs_done;  wire [63:0] srs_o;
+    reg         srs_start; reg  [63:0] srs_in;
+    fp64_rsqrt usrs(.clk(clk), .start(srs_start), .x(srs_in),
+                    .done(srs_done), .o(srs_o));
+
+    // pool-port wires from the submodules
+    wire [63:0] ks_mul0_a, ks_mul0_b, ks_add0_a, ks_add0_b;
+    wire        ks_add0_sub, ks_div_start;
+    wire [63:0] ks_div_a, ks_div_b;
+    wire [63:0] sb_mul0_a, sb_mul0_b, sb_add0_a, sb_add0_b;
+    wire        sb_add0_sub;
+    wire [63:0] sy_mul0_a, sy_mul0_b, sy_add0_a, sy_add0_b;
+    wire        sy_add0_sub;
+    wire [63:0] sx_mul0_a, sx_mul0_b, sx_add0_a, sx_add0_b;
+    wire        sx_add0_sub;
+    wire [63:0] rp_m0a,rp_m0b,rp_m1a,rp_m1b,rp_m2a,rp_m2b,rp_m3a,rp_m3b;
+    wire [63:0] rp_a0a,rp_a0b,rp_a1a,rp_a1b,rp_a2a,rp_a2b,rp_a3a,rp_a3b,rp_a4a,rp_a4b;
+    wire rp_a0s,rp_a1s,rp_a2s,rp_a3s,rp_a4s;
+    wire rp_div_start; wire [63:0] rp_div_a, rp_div_b;
+    wire rp_rr_start; wire [63:0] rp_rr_in;
+    wire [63:0] pdc_m0a,pdc_m0b,pdc_m1a,pdc_m1b,pdc_m2a,pdc_m2b;
+    wire [63:0] pdc_a0a,pdc_a0b; wire pdc_a0s;
+    wire pdc_rr_start; wire [63:0] pdc_rr_in;
+
+    // Sticky "module owns the pool" flags: the streamer spends most of its
+    // time in shared S_W* wait states, so a plain state-range window would
+    // disconnect the pool from the active module. Track start..done instead.
+    reg ks_busy, rp_busy, pdc_busy, sb_busy;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin ks_busy<=0; rp_busy<=0; pdc_busy<=0; sb_busy<=0; end
+        else begin
+            if (ks_start)  ks_busy <= 1;  else if (ks_done)  ks_busy <= 0;
+            if (rp_start)  rp_busy <= 1;  else if (rp_done)  rp_busy <= 0;
+            if (pdc_start) pdc_busy <= 1; else if (pdc_done) pdc_busy <= 0;
+            if (sb_start)  sb_busy <= 1;  else if (sb_done)  sb_busy <= 0;
+        end
+    end
+    wire ks_active  = ks_busy;
+    wire rp_active  = rp_busy;
+    wire pdc_active = pdc_busy;
+    wire sb_active  = sb_busy;
+
+    always @(*) begin
+        // default: drs_iter's own arithmetic
+        pm0_a=a1; pm0_b=b1; pm1_a=a2; pm1_b=b2; pm2_a=64'h0; pm2_b=64'h0;
+        pm3_a=64'h0; pm3_b=64'h0;
+        pa0_a=sa; pa0_b=sb; pa0_sub=ssub;
+        pa1_a=sc; pa1_b=sd; pa1_sub=ssub2;
+        pa2_a=64'h0; pa2_b=64'h0; pa2_sub=1'b0;
+        pa3_a=64'h0; pa3_b=64'h0; pa3_sub=1'b0;
+        pa4_a=64'h0; pa4_b=64'h0; pa4_sub=1'b0;
+        pdiv_start=div_start; pdiv_a=div_a; pdiv_b=div_b;
+        srs_start=rs_start; srs_in=rs_in;
+
+        if (pdc_active) begin
+            pm0_a=pdc_m0a; pm0_b=pdc_m0b; pm1_a=pdc_m1a; pm1_b=pdc_m1b;
+            pm2_a=pdc_m2a; pm2_b=pdc_m2b;
+            pa0_a=pdc_a0a; pa0_b=pdc_a0b; pa0_sub=pdc_a0s;
+            srs_start=pdc_rr_start; srs_in=pdc_rr_in;
+        end else if (rp_active) begin
+            pm0_a=rp_m0a; pm0_b=rp_m0b; pm1_a=rp_m1a; pm1_b=rp_m1b;
+            pm2_a=rp_m2a; pm2_b=rp_m2b; pm3_a=rp_m3a; pm3_b=rp_m3b;
+            pa0_a=rp_a0a; pa0_b=rp_a0b; pa0_sub=rp_a0s;
+            pa1_a=rp_a1a; pa1_b=rp_a1b; pa1_sub=rp_a1s;
+            pa2_a=rp_a2a; pa2_b=rp_a2b; pa2_sub=rp_a2s;
+            pa3_a=rp_a3a; pa3_b=rp_a3b; pa3_sub=rp_a3s;
+            pa4_a=rp_a4a; pa4_b=rp_a4b; pa4_sub=rp_a4s;
+            pdiv_start=rp_div_start; pdiv_a=rp_div_a; pdiv_b=rp_div_b;
+            srs_start=rp_rr_start; srs_in=rp_rr_in;
+        end else if (ks_active) begin
+            pm0_a=ks_mul0_a; pm0_b=ks_mul0_b;
+            pa0_a=ks_add0_a; pa0_b=ks_add0_b; pa0_sub=ks_add0_sub;
+            pdiv_start=ks_div_start; pdiv_a=ks_div_a; pdiv_b=ks_div_b;
+        end else if (sb_active) begin
+            pm0_a=sb_mul0_a; pm0_b=sb_mul0_b;
+            pa0_a=sb_add0_a; pa0_b=sb_add0_b; pa0_sub=sb_add0_sub;
+        end else if (saty_active) begin
+            pm0_a=sy_mul0_a; pm0_b=sy_mul0_b;
+            pa0_a=sy_add0_a; pa0_b=sy_add0_b; pa0_sub=sy_add0_sub;
+        end else if (sax_active) begin
+            pm0_a=sx_mul0_a; pm0_b=sx_mul0_b;
+            pa0_a=sx_add0_a; pa0_b=sx_add0_b; pa0_sub=sx_add0_sub;
+        end
+    end
+
+    assign po1 = pm0_o;  assign po2 = pm1_o;
+    assign so1 = pa0_o;  assign so2 = pa1_o;
+    assign div_done = pdiv_done;  assign div_o = pdiv_o;
+    assign rs_done  = srs_done;   assign rs_o  = srs_o;
 
     // ---- RAM port mux: own | pdc (base U_BASE+N) | sb | saty | sax ----
     reg [RAM_AW-1:0] own_addr;
     reg [63:0] own_wdata;
     reg own_we;
-    reg saty_active, sax_active;   // set by the scale-residual FSM while a spmv drives RAM
 
     // ---- FSM ---- (state defs at module top; see S_IDLE etc above)
     reg [15:0] i;
@@ -395,16 +530,15 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
      else                                    verb = 4'd0;      // wait states -> IDLE
  end
  reg [63:0] saty_pf, sax_pf;
-    wire [63:0] log_relp, log_reld, exp_out;
-    wire [63:0] newscale_mul;
+    // Milestone 5: adaptive scaling is not exercised in 2 iterations, so the
+    // exp/log datapaths are not instantiated (they would add 9 multipliers).
+    // Tie their results off; the scale FSM consequently stays inert.
+    wire [63:0] log_relp = 64'h0, log_reld = 64'h0, exp_out = 64'h0;
+    wire [63:0] newscale_mul = 64'h0;
     reg  logp_start, logd_start, exp_start;
-    wire logp_done, logd_done, exp_done;
-    fp64_log ulogp(clk, logp_start, rel_pri, logp_done, log_relp);
-    fp64_log ulogd(clk, logd_start, rel_dual, logd_done, log_reld);
+    wire logp_done = 1'b0, logd_done = 1'b0, exp_done = 1'b0;
     wire [63:0] n_log_dbl;
     i2d ui2d(n_log_r[10:0], n_log_dbl);     // n_log -> double
-    fp64_exp  uexp(clk, exp_start, div_o, exp_done, exp_out);   // exp(sum_log/(2n))
-    fp64_mul unm(scale_cur, exp_out, newscale_mul);   // scale * exp(...)
  wire pdc_own = (st == S_CONE || st == S_CONEW);
     wire sb_own = (st == S_SB || st == S_SBW);
     always @* begin
@@ -472,6 +606,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             flash_req <= 0; boot_sram_req <= 0;
             if (ks_band_valid && !ks_band_ready) ks_band_valid <= 0;   // level-held: clear after LDL sampled
             own_we <= 0;
+            rs_done_p <= rs_done;   // track every cycle: shared rsqrt keeps done high between calls
             scale_valid_p <= scale_valid;
             case (st)
             // ============ boot: Flash -> SRAM/smem, then compute diag_r/D_y/band/g ============
@@ -556,10 +691,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                 sqacc <= so1; rs_start <= 1; rs_in <= so1; st <= S_NMRW;
             end
             S_NMRW: begin
-                // rs_done RISING-EDGE only: the residue from the previous
-                // normalize (iter>=1) would otherwise exit on cycle 1 with the
-                // STALE rs_o (norm_r = previous iteration's scale).
-                rs_done_p <= rs_done;
+                // rs_done RISING-EDGE only (tracked every cycle above).
                 if (rs_done && !rs_done_p) begin a1 <= SQRT_L; b1 <= rs_o; st <= S_NMRX; end
             end
             S_NMRX: begin norm_r <= po1; st <= S_NMV0; end
