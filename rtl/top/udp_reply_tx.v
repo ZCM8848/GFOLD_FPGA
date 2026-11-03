@@ -39,6 +39,7 @@ module udp_reply_tx #(
     reg [6:0]  idx;
     reg [3:0]  ifg_cnt;
     reg        crc_init;
+    reg [7:0]  crc_data;
 
     assign busy = (st != S_IDLE);
 
@@ -53,7 +54,7 @@ module udp_reply_tx #(
     // CRC
     wire [31:0] crc;
     wire [31:0] crc_next;
-    wire        crc_en = (st == S_TX) && (idx >= 7'd8) && (idx < IDX_FCS);
+    wire        crc_en = (st == S_TX) && (idx >= 7'd9) && (idx <= IDX_FCS);
 
     // 字节选择
     reg [7:0] b;
@@ -128,7 +129,7 @@ module udp_reply_tx #(
             default: b = 8'h00;
         endcase
 
-        if (idx == IDX_FCS)         b = ~crc[7:0];
+        if (idx == IDX_FCS)         b = ~crc_next[7:0];
         if (idx == IDX_FCS + 7'd1)  b = ~crc[15:8];
         if (idx == IDX_FCS + 7'd2)  b = ~crc[23:16];
         if (idx == IDX_FCS + 7'd3)  b = ~crc[31:24];
@@ -139,10 +140,15 @@ module udp_reply_tx #(
         .rst_n    ( rst_n    ),
         .init     ( crc_init ),
         .en       ( crc_en   ),
-        .data     ( b        ),
+        .data     ( crc_data ),
         .crc      ( crc      ),
         .crc_next ( crc_next )
     );
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) crc_data <= 8'h0;
+        else        crc_data <= b;
+    end
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin

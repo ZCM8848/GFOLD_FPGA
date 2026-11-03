@@ -52,6 +52,7 @@ module icmp_reply_tx #(
     reg [15:0] icmp_cksum_r;
     reg [3:0]  ifg_cnt;
     reg        crc_init;
+    reg [7:0]  crc_data;
 
     // 锁存的参数
     reg [47:0] dst_mac_r;
@@ -83,7 +84,7 @@ module icmp_reply_tx #(
     // CRC
     wire [31:0] crc;
     wire [31:0] crc_next;
-    wire        crc_en  = (st == S_TX) && (idx >= 11'd8) && (idx < idx_fcs);
+    wire        crc_en  = (st == S_TX) && (idx >= 11'd9) && (idx <= idx_fcs);
 
     // 字节选择
     reg [7:0] b;
@@ -146,7 +147,7 @@ module icmp_reply_tx #(
         if (idx >= 11'd50 && idx < idx_fcs) b = ram_rdata;
 
         // FCS
-        if (idx == idx_fcs)        b = ~crc[7:0];
+        if (idx == idx_fcs)        b = ~crc_next[7:0];
         if (idx == idx_fcs + 11'd1) b = ~crc[15:8];
         if (idx == idx_fcs + 11'd2) b = ~crc[23:16];
         if (idx == idx_fcs + 11'd3) b = ~crc[31:24];
@@ -157,10 +158,15 @@ module icmp_reply_tx #(
         .rst_n    ( rst_n    ),
         .init     ( crc_init ),
         .en       ( crc_en   ),
-        .data     ( b        ),
+        .data     ( crc_data ),
         .crc      ( crc      ),
         .crc_next ( crc_next )
     );
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) crc_data <= 8'h0;
+        else        crc_data <= b;
+    end
 
     // 状态机
     always @(posedge clk or negedge rst_n) begin
