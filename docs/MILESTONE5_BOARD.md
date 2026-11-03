@@ -70,10 +70,11 @@ VS2: worst rel = 1.20e-10
 #dsp   40 / 40   (100%)
 #eram  29 / 108  (26.9%)
 #lut   34562
-#slice* 26908 / 21216 (126.8% at opt_gate; P&R 缁撴灉瑙佷笅)
+#slice* 20574 / 21216 (96.97% at opt_gate; 3-mul/3-add version)
 ```
 
-40 DSP 姝ｅソ鐢ㄦ弧锛汱UT/slice 鍋忕揣锛宍opt_gate` 鐨勪及璁¤秴杩?100%锛?闇�瑕?P&R 鐨勫疄闄呮墦鍖呯粨鏋溿�傝嫢浠嶈秴锛屽彲鎶?pool 闄嶅埌 3 mul + 3 add
+40 DSP 正好用满；3-mul/3-add 版本把 slice 从 126.8% 降到 96.97%，
+4 个乘法器（3 pool + 1 rsqrt）各分 10 DSP，不再溢出到 LUT。
 锛坮oot_plus 鐨?pp 鎸埌涓嬩竴鎷嶏級锛岃 4 涓箻娉曞櫒鍚勬嬁 10 DSP锛屽噺灏?LUT 婧㈠嚭銆?
 ## 寰呭姙
 

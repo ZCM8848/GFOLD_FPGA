@@ -23,12 +23,22 @@ module gfold_m5_top #(
         else sys_rst_n<=1'b1;
     end
 
-    wire clk_125, clk_sol_raw, pll_lock;
-    PLL u_pll(.refclk(I_sys_clk),.clk0_out(clk_125),.clk1_out(clk_sol_raw),
+    wire clk_125, pll_lock;
+    PLL u_pll(.refclk(I_sys_clk),.clk0_out(clk_125),.clk1_out(),
               .clk4_out(),.clk5_out(),.lock(pll_lock),.reset(~sys_rst_n));
+    wire rst_125_n=sys_rst_n&pll_lock, rst_rx_n=sys_rst_n&pll_lock;
+
+    // Solver clock: 125/4 = 31.25 MHz, generated in fabric and driven through
+    // a global clock buffer (the PLL C1 output is not recognised as a clock
+    // net by the timing engine on this device/IP combination).
+    reg [1:0] sol_div;
+    always @(posedge clk_125 or negedge rst_125_n) begin
+        if (!rst_125_n) sol_div <= 2'b00;
+        else sol_div <= sol_div + 1'b1;
+    end
+    wire clk_sol_raw = sol_div[1];
     wire clk_sol;
     PH1P_LOGIC_BUFG u_bufg_sol(.i(clk_sol_raw), .o(clk_sol));
-    wire rst_125_n=sys_rst_n&pll_lock, rst_rx_n=sys_rst_n&pll_lock;
 
     wire phy_rst_done;
     phy_rst #(.RESET_TIME_MS(2),.POST_RST_MS(5),.CLK_FREQ_HZ(50_000_000)) u_phy_rst(
