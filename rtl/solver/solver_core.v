@@ -1,5 +1,5 @@
 `timescale 1ns/1ps
-// solver_core ï¿?small on-chip PH1P35 demo:
+// solver_core ï¿½?small on-chip PH1P35 demo:
 //   * drs_iter (N=10, M=49, HB=4, L=60, NODE=2) with the pool datapath
 //   * state RAM / KKT RAM in inferred ERAM
 //   * on-chip sram64_ctrl (bram) and boot ROM from the ETH image RAM
@@ -67,7 +67,7 @@ module solver_core #(
 
     drs_iter #(
         .N(N), .M(M), .NNZ(NNZ), .HB(HB), .L(L), .LM1(LM1),
-        .RAM_AW(RAM_AW), .SRAM_AW(SRAM_AW), .BOOT_EXT(1),
+        .RAM_AW(RAM_AW), .SRAM_AW(SRAM_AW), .BOOT_EXT(1), .SCALE_EN(0),
         .NODE(NODE), .SQRT_L(SQRT_L),
         .RY_FILE(RY_FILE), .DY_FILE(DY_FILE)
     ) dut (

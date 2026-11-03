@@ -35,6 +35,7 @@ module drs_iter #(
     parameter AVAL_FILE = "../data/kkt/full/Aval.hex",
     parameter BOOT_EXT = 0   // 0: on-chip CFI flash controller; 1: external boot-memory port
     ,parameter SRAM_AW = 18   // external SRAM word-address width (18 = 2MB; 12 = on-chip demo)
+    ,parameter SCALE_EN = 1   // 0: omit adaptive-scale datapath (s_build + 2 spmv)
     ,parameter RY_FILE = "../data/kkt/full/r_y_r.hex",
     parameter DY_FILE = "../data/kkt/full/Dy_r.hex"
     ,parameter NODE = 100, Z0 = 14, ZP = 7, NP = 3
@@ -218,6 +219,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     wire sb_we;
     wire sb_sram_req, sb_sram_we; wire [17:0] sb_sram_waddr; wire [63:0] sb_sram_wdata;
     wire sb_sram_busy; wire [63:0] sb_sram_rdata;
+    generate if (SCALE_EN) begin : g_sb
     s_build #(.N(N), .M(M), .NNZ(NNZ), .HB(HB), .MAXROW(6), .RAM_AW(RAM_AW),
               .DY_OFFSET(DY_BASE), .COO_BASE(COO_BASE), .BAND_SRAM_BASE(AA_BASE)) u_sb(
         .clk(clk), .rst_n(rst_n), .start(sb_start),
@@ -227,6 +229,16 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
         .done(sb_done),
         .mul0_a(sb_mul0_a), .mul0_b(sb_mul0_b), .mul0_o(pm0_o),
         .add0_a(sb_add0_a), .add0_b(sb_add0_b), .add0_sub(sb_add0_sub), .add0_o(pa0_o));
+    end else begin : g_sb_off
+        assign sb_done = 1'b0;
+        assign sb_addr = {RAM_AW{1'b0}};
+        assign sb_wdata = 64'h0;
+        assign sb_we = 1'b0;
+        assign sb_sram_req = 1'b0;
+        assign sb_sram_we = 1'b0;
+        assign sb_sram_waddr = 18'h0;
+        assign sb_sram_wdata = 64'h0;
+    end endgenerate
 
     // ---- spmv for adaptive-scale residual: A^T y (transpose=1) then A x
     //      (transpose=0), both reusing BAND_BASE workspace (band idle outside scale rebuild) (sequential) ----
@@ -234,6 +246,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     wire [12:0] saty_addr; wire [63:0] saty_wdata; wire saty_we, saty_done;   // 13-bit: spmv ram_addr width
     wire saty_sram_req, saty_sram_we; wire [17:0] saty_sram_waddr; wire [63:0] saty_sram_wdata;
     wire saty_sram_busy; wire [63:0] saty_sram_rdata;
+    generate if (SCALE_EN) begin : g_saty
     spmv_fp64 #(.N(N), .M(M), .NNZ(NNZ), .transpose(1), .COO_BASE(COO_BASE)) u_saty(
         .clk(clk), .rst_n(rst_n), .start(saty_start), .x_in(saty_x_in), .din_valid(saty_din_valid),
         .ram_addr(saty_addr), .ram_wdata(saty_wdata), .ram_we(saty_we), .ram_rdata(ram_rdata),
@@ -242,10 +255,21 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
         .sram_wdata(saty_sram_wdata), .sram_busy(saty_sram_busy), .sram_rdata(saty_sram_rdata),
         .mul0_a(sy_mul0_a), .mul0_b(sy_mul0_b), .mul0_o(pm0_o),
         .add0_a(sy_add0_a), .add0_b(sy_add0_b), .add0_sub(sy_add0_sub), .add0_o(pa0_o));
+    end else begin : g_saty_off
+        assign saty_done = 1'b0;
+        assign saty_addr = 13'h0;
+        assign saty_wdata = 64'h0;
+        assign saty_we = 1'b0;
+        assign saty_sram_req = 1'b0;
+        assign saty_sram_we = 1'b0;
+        assign saty_sram_waddr = 18'h0;
+        assign saty_sram_wdata = 64'h0;
+    end endgenerate
     reg  sax_start, sax_din_valid; reg [63:0] sax_x_in;
     wire [12:0] sax_addr; wire [63:0] sax_wdata; wire sax_we, sax_done;   // 13-bit: spmv ram_addr width
     wire sax_sram_req, sax_sram_we; wire [17:0] sax_sram_waddr; wire [63:0] sax_sram_wdata;
     wire sax_sram_busy; wire [63:0] sax_sram_rdata;
+    generate if (SCALE_EN) begin : g_sax
     spmv_fp64 #(.N(N), .M(M), .NNZ(NNZ), .transpose(0), .COO_BASE(COO_BASE)) u_sax(
         .clk(clk), .rst_n(rst_n), .start(sax_start), .x_in(sax_x_in), .din_valid(sax_din_valid),
         .ram_addr(sax_addr), .ram_wdata(sax_wdata), .ram_we(sax_we), .ram_rdata(ram_rdata),
@@ -254,6 +278,16 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
         .sram_wdata(sax_sram_wdata), .sram_busy(sax_sram_busy), .sram_rdata(sax_sram_rdata),
         .mul0_a(sx_mul0_a), .mul0_b(sx_mul0_b), .mul0_o(pm0_o),
         .add0_a(sx_add0_a), .add0_b(sx_add0_b), .add0_sub(sx_add0_sub), .add0_o(pa0_o));
+    end else begin : g_sax_off
+        assign sax_done = 1'b0;
+        assign sax_addr = 13'h0;
+        assign sax_wdata = 64'h0;
+        assign sax_we = 1'b0;
+        assign sax_sram_req = 1'b0;
+        assign sax_sram_we = 1'b0;
+        assign sax_sram_waddr = 18'h0;
+        assign sax_sram_wdata = 64'h0;
+    end endgenerate
 
     reg  rp_start, rp_dv;
     reg  [63:0] rp_r, rp_g, rp_p, rp_mu, rp_eta;
