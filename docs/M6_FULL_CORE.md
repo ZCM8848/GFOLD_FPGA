@@ -83,12 +83,21 @@ RAM 推断限制。
 | LUT6 | 16,469 / 21,216 (77.6%) |
 | ERAM | 104 / 108 |
 | DSP | 40 / 40 |
-| Setup WNS | **+3.763 ns** (0 violated) |
+| Setup WNS | **+3.763 ns** (place) |
 | FMAX | 88.99 MHz |
-| Hold WNS | -0.328 ns (147 endpoints) |
 
-Hold 违例由 `drHoldFix on` 在 route 阶段处理（M5 也出现过类似负数报告，
-板级功能正常）。route/bitgen 本次运行尚未结束，bit 文件尚未产出。
+route 后：
+
+| 项 | 值 |
+|---|---:|
+| Setup WNS | **+1.216 ns** |
+| Hold WNS | **+0.020 ns** |
+| Slice | 16,488 |
+| ERAM | 104 |
+| DSP | 40 |
+
+首次 route 后 bitgen 因 `start` 未约束被 TD 拒绝；`pin_ddr2.adc` 已把
+`start` 指到 SW1（A4），正在重新跑 place/route/bitgen。
 
 ## 尚未完成
 
