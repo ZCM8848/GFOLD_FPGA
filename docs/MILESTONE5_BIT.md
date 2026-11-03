@@ -138,3 +138,52 @@ SMALL-PROBLEM CHECK: PASS
 | `start` åŽ LED1 ä¸äº® | solver boot æœªå®Œæˆ / æ—¶é’Ÿ | æ£€æŸ¥ `clk_sol`ï¼ˆBUFG è¾“å‡ºï¼‰ï¼›ç”¨ PING ACK çš„ `solver_done` ä½ |
 | `check` DUMP è¶…æ—¶ | 125 MHz TX FCSï¼ˆå·²ä¿®ï¼‰æˆ– dump_tx æ—¶åº | æœ¬ç‰ˆå·²ä¿® TX CRCï¼›è‹¥ä»è¶…æ—¶ï¼Œçœ‹ `final_timing.rpt` |
 | `check` æ•°å€¼é”™ä½† DUMP æ­£å¸¸ | solver è·¯å¾„ï¼ˆclk_sol æœª STAï¼‰ | å…ˆçœ‹ VS1ï¼›è‹¥ VS1 é”™ï¼ŒæŸ¥ boot/image |
+
+## ÉÏ°åÊµ²â½á¹û£¨2026-11-03£©
+
+ÉÕÂ¼ `gfold_m5.bit` ºó£¬ÔÚ±¾»ú£¨192.168.1.100£©Êµ¼ÊÔËÐÐ£º
+
+### PING
+
+```
+ACK seq=1 rx_frames=91 link=0x00000000
+...
+5/5 replied
+```
+
+### LOAD + START + CHECK
+
+```
+Image: 4088B 511w CRC=0x9767674C
+RESET...
+LOAD 3 pkts...
+  3/3
+FINISH...
+  FINACK CRC=0x9767674C status=0
+  PASS
+START sent; waiting 0.5s for boot + 2 iterations...
+VS1: worst_rel=3.071e-13 bad=0/60 PASS
+VS2: worst_rel=1.199e-10 bad=0/60 PASS
+SMALL-PROBLEM CHECK: PASS
+```
+
+**°å¼¶½á¹ûÓë RTL ·ÂÕæÖðÎ»¼¶Ò»ÖÂ£º**
+
+| Ïî | ·ÂÕæ | ÉÏ°å |
+|---|---|---|
+| VS1 worst rel | 3.07e-13 | **3.071e-13** |
+| VS2 worst rel | 1.20e-10 | **1.199e-10** |
+| check_drs | PASS | **PASS** |
+
+ÕâÖ¤Ã÷£º
+
+- pool °æ solver£¨3 mul + 3 add + 1 div + ¹²Ïí rsqrt£©ÔÚ PH1P35 ÉÏÕæÊµÔËÐÐ£»
+- ETH ÏÂ·¢¾µÏñ¡¢boot¡¢2 ÂÖ DRS¡¢VS1/VS2 ¸´ÖÆ¡¢DUMP È«Á´Â·Õý³££»
+- ½Ø¶Ï FP64 ÊýÖµÂ·¾¶Óë golden µÄ²îÒìÔÚ 5e-10 ÒÔÄÚ£»
+- Ö®Ç°ÐÞ¸´µÄ TX CRC Ê±ÐòÃ»ÓÐÓ°Ïì PING/LOAD/DUMP¡£
+
+### Ê£ÓàÊÂÏî
+
+- ÍêÕû G-FOLD ÎÊÌâ£¨N=1100/M=2107£©ÈÔÐè DDR2£»µ±Ç°ÊÇÆ¬ÉÏÐ¡ÊµÀý¡£
+- `rgmii_rxc` hold -0.357 ns Î´Ó°ÏìÊµ²â£¨ping/load/check ¾ùÕý³££©¡£
+- `clk_sol` ÈÔÎ´ÄÉÈë TD STA£¬µ« 31.25 MHz Êµ²âÕý³£¡£
