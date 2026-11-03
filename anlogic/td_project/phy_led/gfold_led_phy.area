@@ -1,0 +1,76 @@
+standard
+***Report Model: led_walk_top Device: PH1P35MDG324***
+
+Design Statistics
+#IO                         5   out of    160    3.12%
+  #input                    1
+  #output                   4
+  #inout                    0
+#lut6                      36   out of  21216    0.17%
+#reg                       28
+  #slice reg               28   out of  42432    0.07%
+  #pad reg                  0
+
+Utilization Statistics
+#slice                     36   out of  21216    0.17%
+  #used ram                 0
+    #dram lut               0
+    #shifter lut            0
+  #used logic              36
+    #with luts             10
+    #with adder            26
+    #reg only               0
+#f7mux                      0   out of  10608    0.00%
+#f8mux                      0   out of   5304    0.00%
+#eram                       0   out of    108    0.00%
+  #eram20k                  0
+  #fifo20k                  0
+#dsp                        0   out of     40    0.00%
+#ddr_byte                   0   out of     12    0.00%
+#mipi_tx                    0   out of      2    0.00%
+#mipi_rx                    0   out of      2    0.00%
+#pad                        5   out of    160    3.12%
+#pll                        0   out of      6    0.00%
+#gclk                       1   out of     32    3.12%
+#lclk                       0   out of     12    0.00%
+#sclk                       2   out of     48    4.17%
+#mlclk                      0   out of      6    0.00%
+#ioclk                      0   out of     18    0.00%
+
+
+Detailed IO Report
+
+    Name       Direction    Location    IOStandard    IOType    DriveStrength    PullType    PackReg  
+  I_sys_clk      INPUT         C4        LVCMOS33      HDIO          N/A          PULLUP      NONE    
+  O_led[3]      OUTPUT         D6        LVCMOS33      HDIO           8            NONE       NONE    
+  O_led[2]      OUTPUT         C6        LVCMOS33      HDIO           8            NONE       NONE    
+  O_led[1]      OUTPUT        E10        LVCMOS33      HDIO           8            NONE       NONE    
+  O_led[0]      OUTPUT        D10        LVCMOS33      HDIO           8            NONE       NONE    
+
+Report Clock Domain Luts:
+
+-------------------------------------------------------------------------------------------------------------
+  Index   |  Name    |  Frequency   |  LUT As Logic   |  LUT As Shifter   |  LUT As Dram   |  BRAM   |  DSP
+-------------------------------------------------------------------------------------------------------------
+  #1      |  clk_in  |  50MHz       |  34             |  0                |  0             |  0      |  0
+-------------------------------------------------------------------------------------------------------------
+
+Clock Resource Statistics
+Index     ClockNet           Type            DriverType         Driver                ClockFanout        GclkLocation
+#1        I_sys_clk_dup_1    InferredGclk    hdio               I_sys_clk_syn_2.di    27                 x23y39z16
+
+Report Hierarchy Area:
++---------------------------------------------------------------------------------------------------------------------------------+
+|Instance |Module       |logic lut |ripple  |seq     |eram    |dsp     |dram lut |shifter lut |f7mux   |f8mux   |pll     |ddr     |
++---------------------------------------------------------------------------------------------------------------------------------+
+|top      |led_walk_top |10        |26      |28      |0       |0       |0        |0           |0       |0       |0       |0       |
++---------------------------------------------------------------------------------------------------------------------------------+
+
+
+DataNet Average Fanout:
+
+   Index     Fanout    Nets  
+    #1         1        60   
+    #2         2        25   
+    #3         3        3    
+  Average     1.35           
