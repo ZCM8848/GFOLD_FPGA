@@ -204,3 +204,6 @@ anlogic/td_project/phy_led/flow.status
 anlogic/td_project/phy_led/place_flow.status
 anlogic/td_project/phy_led/route_flow.status
 anlogic/td_project/phy_led/.*.f
+anlogic/td_project/phy_ddr2/*.area
+anlogic/td_project/phy_ddr2/*.timing
+anlogic/td_project/phy_ddr2/*.ts

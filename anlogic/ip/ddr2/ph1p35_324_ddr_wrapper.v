@@ -17,6 +17,12 @@ module ph1p35_324_ddr_wrapper (
     output wire        O_mc_app_rd_data_valid,
     output wire        O_mc_app_rdy,
     output wire        O_mc_app_wdf_rdy,
+    // Separate AXI channel ready signals for a protocol-correct master.
+    // The legacy O_mc_app_rdy/O_mc_app_wdf_rdy are left unchanged for
+    // compatibility with the camera project's mc_to_user_interface.
+    output wire        O_mc_app_awready,
+    output wire        O_mc_app_arready,
+    output wire        O_mc_app_wready,
 
 // DDR3 signals
     output wire[12:0]  ddr_addr,
@@ -73,6 +79,9 @@ module ph1p35_324_ddr_wrapper (
     assign O_mc_app_rd_data_valid  = paxi_rvalid                                ;
     assign O_mc_app_rdy            = paxi_arready || paxi_awready               ;
     assign O_mc_app_wdf_rdy        = paxi_awready                               ;
+    assign O_mc_app_awready        = paxi_awready                               ;
+    assign O_mc_app_arready        = paxi_arready                               ;
+    assign O_mc_app_wready         = paxi_wready                                ;
 
 
     ddr2 u_ddr2 (

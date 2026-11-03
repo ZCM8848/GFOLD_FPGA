@@ -9,7 +9,7 @@
 - 一个 128-bit 写→读回环正确；
 - 地址步进、字节通道、DQS/DQ 映射正常。
 
-## Bit
+## Bit（v2 调试版）
 
 ```
 anlogic/td_project/phy_ddr2/gfold_ddr2.bit
@@ -18,50 +18,69 @@ anlogic/td_project/phy_ddr2/gfold_ddr2.bit
 | 项 | 值 |
 |---|---|
 | 大小 | 1,789,489 bytes |
-| SHA256 | `482389792621F997810C860F20FD04C66A9EEE162869DA08220489155E094C65` |
-| 生成时间 | 2026-11-03 21:36:05 |
+| SHA256 | `34CB1AFC1C157263F723D4AE6FC9407C9F7CF2D7BA1AEC68944A3D420971A166` |
+| 生成时间 | 2026-11-03 21:51:17 |
 | 顶层 | `ddr2_smoke_top` |
-| 资源 | 3,356 LUT, 2,934 reg, 2 PLL, 6 DDR byte, slice 11.84% |
-| 时序 | SWNS +2.776 ns, HWNS +0.020 ns, STA coverage 89.9% |
+| 资源 | 2,741 slice (12.92%), 2 PLL, 6 DDR byte |
+| 时序 | SWNS +2.838 ns, HWNS +0.021 ns |
 
-## 测试内容
+## 旧版失败原因
 
-上电后 `ddr2_smoke_top` 的 FSM：
+旧版 FSM 有两个 AXI 协议问题：
 
-1. 等待 `O_init_calib_complete`（DDR2 PHY 校准完成）。
-2. 向 DDR2 地址 `idx*8`（`idx=0..255`）写 128-bit 模式：
-   `{idx[7:0], ~idx[7:0], 64'h0123456789ABCDEF ^ {8{idx[7:0]}}}`。
-3. 从相同地址读回 256 个字，逐字比较。
-4. 全部一致 → `pass=1`；任一不一致 → `fail=1`（粘滞）。
+1. **写数据 ready 用错信号**：wrapper 的 `O_mc_app_wdf_rdy` 接的是
+   `paxi_awready`（写地址 ready），不是 `paxi_wready`（写数据 ready）。
+   旧 FSM 在 `awready` 后立刻撤销 `WVALID`，如果 `wready` 当拍为低，
+   写数据就丢了。
+2. **读命令 ready 混用**：`O_mc_app_rdy = paxi_arready || paxi_awready`，
+   读 FSM 可能在 `arready` 还没拉高时就前进。
 
-## 烧录后的预期 LED
+旧版写完 256 个字后立刻读，也没有等待写管道排空，读可能超过未落盘写。
 
-| LED | 引脚 | 含义 | 预期 |
-|---|---|---|---|
-| LED0 | D10 | `init_calib_complete` | 配置后几 ms 内常亮 |
-| LED1 | E10 | PASS | 写/读 256 字全部一致后常亮 |
-| LED2 | C6 | FAIL | 任一不一致时常亮 |
-| LED3 | D6 | heartbeat | 约 0.3 s 翻转（ddr_clk 域） |
+## v2 测试内容
 
-正常情况：**LED0 亮 + LED1 亮 + LED2 灭**。
+`ph1p35_324_ddr_wrapper.v` 新增三个独立 ready 输出：
+`O_mc_app_awready` / `O_mc_app_arready` / `O_mc_app_wready`，旧端口保持不变。
+FSM 分别跟踪 `AWVALID` 和 `WVALID` 的握手，只有两者都被接受才算一次写完成。
 
-测试只需要几十微秒到几毫秒（256 写 + 256 读，DDR2 延迟主导）。
+上电后分三级测试：
 
-## 如果失败
+| 阶段 | 字数 | 起始地址 | 写间隔 | 内容 |
+|---|---|---|---|---|
+| 0 | 1 | `0x0000` | 0 | 固定 `0xA5` 重复 16 字节 |
+| 1 | 16 | `0x1000` | 16 拍 | 每字按 `idx` 变化 |
+| 2 | 256 | `0x2000` | 8 拍 | 每字按 `idx` 变化 |
 
-| 现象 | 可能原因 | 下一步 |
+每级写完都等待 **20,000 个 `ddr_clk`** 让写管道排空，再逐个读回比较。
+测试模式 16 个字节完全相同，因此即使 DDR2 字节/字 lane 顺序与预期不同也能通过；
+这级先验证地址、握手和读写顺序，lane 顺序留到后续测试。
+
+## 烧录后的 LED 判读
+
+LED 丝印映射已由 `gfold_led.bit` 实测确认：D10→LED1、E10→LED2、
+C6→LED3、D6→LED4；LED14 是电源灯。
+
+| LED | 引脚 | 含义 |
 |---|---|---|
-| LED0 不亮 | DDR2 校准失败 / 时钟/PLL / 引脚 ADC | 检查 `ddr2.adc`、PLL 参考时钟、板上 DDR2 供电 |
-| LED0 亮、LED2 亮 | 写/读数据不一致 | 先减小测试字数、改成固定地址、加 ILM 观察；检查 AXI `paxi_wready` 握手 |
-| LED0 亮、LED1/LED2 都不亮 | FSM 卡住 | 检查 `mc_rdy`/`wdf_rdy`/`rd_data_valid` 握手；可能写数据未被 AXI 接受 |
-| LED3 不闪 | `ddr_clk` 未起振 | 检查 DDR2 IP 的 `dhi_clk`/PLL |
+| LED1 | D10 | `init_calib_complete` |
+| LED2 | E10 | 阶段 0（单字）通过 |
+| LED3 | C6 | 阶段 1（16 字）通过 |
+| LED4 | D6 | 阶段 2（256 字）通过后闪烁 |
+
+| 观察 | 结论 |
+|---|---|
+| 只有 LED1 亮 | 单字写/读失败或卡在 AW/W/AR 握手 |
+| LED1+LED2 亮 | 单字通过，16 字地址步进/节流失败 |
+| LED1+LED2+LED3 亮，LED4 不闪 | 256 字吞吐/连续写失败 |
+| LED1+LED2+LED3 亮，LED4 闪 | **全部通过** |
 
 ## 设计说明
 
 - `ph1p35_324_ddr_wrapper.v` 来自 `FPGA_is_good/work/camera_hdmi_720p/ip/ddr2`（同封装 PH1P35MDG324，相机项目已验证）；
 - DDR2 IP 通过 TD 的 `IpADCList`/`IpSDCList` 和 `ddr2.xml` 引入；
 - 用户接口直接驱动 AXI（省掉相机项目的 `w155_d512_fifo`），单拍写/读；
-- 写地址步进 `+8`，与相机 `video_out/video_in` 的 `O_ddr_user_addr + 'd8` 一致。
+- 写地址步进 `+8`，与相机 `video_out/video_in` 的 `O_ddr_user_addr + 'd8` 一致
+  （该地址单位是 16-bit word，`+8` 正好是一个 128-bit beat）。
 
 ## 下一步（M6 主体）
 
