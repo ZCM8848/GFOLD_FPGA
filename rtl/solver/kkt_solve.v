@@ -6,7 +6,7 @@
 // by chaining the validated blocks: 2x spmv_fp64 (A^T and A) + 1x
 // banded_ldl_fp64_rb, orchestrated by this FSM. All arithmetic IEEE-754 FP64.
 // Phase 4a: the S band is now STREAMED IN (band_in/band_valid, (HB+1)*N words)
-// instead of $readmemh ï¿½?the band can come from s_build at runtime, so the
+// instead of $readmemh ï¿?the band can come from s_build at runtime, so the
 // adaptive-scaling loop can re-factorize with a rebuilt S (new D_y).
 //
 // RAM-port design (proj_dual_cone / spmv pattern): one shared external RAM
@@ -87,12 +87,14 @@ module kkt_solve #(
     localparam LMAX = (N > M) ? N : M;
     localparam AD_ATVY = LMAX;          // spmv1 out region (A^T vy, N words)
     localparam AD_VX   = 2 * LMAX;      // vx region (later overwritten by zx)
-    localparam AD_AZ   = 3 * LMAX;      // az region (later zy, M words in place)
+    // A^T vy is dead after the RHS stream, so az/zy reuses its region.
+    // This reduces the KKT RAM from 4*LMAX to 3*LMAX words.
+    localparam AD_AZ   = LMAX;          // az region (later zy, M words in place)
     localparam RHO_X   = 64'h3eb0c6f7a0b5ed8d;  // 1e-6 (bit-exact double)
 
     // ---- static coefficient arrays (aa_gram pattern: $readmemh, sequential index) ----
-    reg [63:0] r_y_arr [0:M-1];
-    reg [63:0] Dy_arr  [0:M-1];
+    (* ram_style = "bram" *) reg [63:0] r_y_arr [0:M-1];
+    (* ram_style = "bram" *) reg [63:0] Dy_arr  [0:M-1];
     initial begin
 `ifndef SYNTHESIS
         $readmemh(RY_FILE, r_y_arr);
@@ -101,7 +103,7 @@ module kkt_solve #(
         $readmemh(DY_FILE, Dy_arr);
 `endif
     end
-    reg [63:0] zx_arr [0:N-1];          // zx captured from LDL, fed to spmv2
+    (* ram_style = "bram" *) reg [63:0] zx_arr [0:N-1];          // zx captured from LDL, fed to spmv2
 
     // ---- sub-blocks ----
     wire sp1_done_w;
@@ -215,7 +217,9 @@ module kkt_solve #(
             ram_wdata = sp1_wdata;
             ram_we = sp1_we;
         end else if (sp2_own) begin
-            ram_addr = 2 * LMAX + sp2_addr;
+            // x region at 2*LMAX, out region reuses A^Tvy at LMAX.
+            ram_addr = (sp2_addr < LMAX) ? (2 * LMAX + sp2_addr)
+                                         : (LMAX + (sp2_addr - LMAX));
             ram_wdata = sp2_wdata;
             ram_we = sp2_we;
         end else begin

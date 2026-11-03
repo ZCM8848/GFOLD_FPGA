@@ -7,6 +7,7 @@ module tb_drs_iter;
     parameter N = 1100, M = 2107, NNZ = 4783, HB = 17;
     parameter L = N + M + 1, LM1 = L - 1;
     parameter integer ITERS = 2;
+    parameter EXT_WS = 1;
     reg clk = 0, rst_n = 0;
     always #5 clk = ~clk;
     reg start = 0, refactor = 0, band_valid = 0;
@@ -35,7 +36,7 @@ module tb_drs_iter;
     reg [7:0] fl_mem [0:303095];   // 37887 words * 8 bytes
     assign fl_dq = (!fl_ce_n && !fl_oe_n && fl_addr < 303096) ? fl_mem[fl_addr] : 8'hz;
 
-    drs_iter #(.N(N), .M(M), .NNZ(NNZ), .HB(HB)) dut(
+    drs_iter #(.N(N), .M(M), .NNZ(NNZ), .HB(HB), .EXT_WS(EXT_WS)) dut(
         .clk(clk), .rst_n(rst_n), .start(start),
         .refactor(refactor), .band_in(band_in), .band_valid(band_valid), .iter(iter),
         .scale_valid(scale_valid), .scale_r(scale_r),

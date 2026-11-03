@@ -20,7 +20,9 @@
 module s_build #(
     parameter N = 10, M = 20, NNZ = 41, HB = 4, MAXROW = 4,
     parameter RAM_AW = 15,
-    parameter DY_OFFSET = 0,     // D_y base in the shared RAM (cur_row = DY_OFFSET + row)
+    parameter DY_OFFSET = 0,     // D_y base in the shared RAM (legacy on-chip path)
+    parameter DY_SRAM_BASE = 0,  // external SRAM word base of D_y (EXT_WS path)
+    parameter EXT_WS = 0,        // 1: D_y is in external SRAM
     parameter COO_BASE = 0,      // SRAM word base of the packed COO
     parameter BAND_SRAM_BASE = 0 // SRAM word base of the band output
 )(
@@ -188,11 +190,20 @@ module s_build #(
                     nrow <= nrow + 1; kk <= kk + 1; st <= S_LOAD;
                 end
             end
-            // ---- row complete: read D_y[cur_row] (shared RAM) ----
+            // ---- row complete: read D_y[cur_row] ----
             S_ROWEND: begin
-                ram_addr <= DY_OFFSET + cur_row; pa <= 0; pb <= 0; st <= S_ROWEND_W;
+                if (EXT_WS) begin
+                    sram_waddr <= DY_SRAM_BASE + cur_row; sram_we <= 0; sram_start <= 1;
+                    pa <= 0; pb <= 0; st <= S_ROWEND_W;
+                end else begin
+                    ram_addr <= DY_OFFSET + cur_row; pa <= 0; pb <= 0; st <= S_ROWEND_W;
+                end
             end
-            S_ROWEND_W: begin st <= S_ROWEND_DY; end
+            S_ROWEND_W: begin
+                if (EXT_WS) begin
+                    if (sram_done) begin dy_row <= sram_rdata; st <= S_PAIR; end
+                end else st <= S_ROWEND_DY;
+            end
             S_ROWEND_DY: begin dy_row <= ram_rdata; st <= S_PAIR; end
             // ---- pair (pa,pb): read-modify-write band[dc][c_lo] in SRAM ----
             S_PAIR: begin

@@ -36,6 +36,7 @@ module drs_iter #(
     parameter BOOT_EXT = 0   // 0: on-chip CFI flash controller; 1: external boot-memory port
     ,parameter SRAM_AW = 18   // external SRAM word-address width (18 = 2MB; 12 = on-chip demo)
     ,parameter SCALE_EN = 1   // 0: omit adaptive-scale datapath (s_build + 2 spmv)
+    ,parameter EXT_WS = 0     // 1: CB/DY workspace lives in external DDR2; BAND stays on-chip
     ,parameter RY_FILE = "../data/kkt/full/r_y_r.hex",
     parameter DY_FILE = "../data/kkt/full/Dy_r.hex"
     ,parameter NODE = 100, Z0 = 14, ZP = 7, NP = 3
@@ -90,11 +91,15 @@ module drs_iter #(
     localparam RSK_BASE= 3 * L;
     localparam G_BASE  = 4 * L;
     localparam DR_BASE = 4 * L + LM1;
-    localparam VPR_BASE= 5 * L + LM1;      // v_prev
-    localparam CB_BASE = 6 * L + LM1;      // c[0..n) + (-b)[n..n+m) for g recompute (packed after VPR)
-    localparam BAND_BASE = CB_BASE + LM1;          // spmv workspace (2*LMAX words; band moved to SRAM)
-    localparam DY_BASE = BAND_BASE + 2 * LMAX;     // D_y for s_build (M words)
-    localparam ZMASK_BASE = DY_BASE;  // boot zmask data shares DY area (loaded to reg bits at reset)
+    // VPR (v_prev) was only written and never read; it is omitted to save ERAM.
+    // On-chip: V/UT/U/RSK/G/DR + BAND spmv workspace.
+    // External DDR2 workspace (EXT_WS=1): CB (c/-b) + DY (D_y).
+    localparam BAND_BASE = 5 * L + LM1;           // on-chip spmv workspace (2*LMAX words)
+    localparam WS_BASE   = BAND_BASE + 2 * LMAX;  // first external-workspace address
+    localparam CB_BASE   = ((WS_BASE + 255) / 256) * 256; // external c/-b
+    localparam DY_BASE   = CB_BASE + LM1;          // external D_y
+    localparam ZMASK_BASE = DY_BASE;  // zmask is captured into zmask_bits at boot; address unused
+    localparam [17:0] WS_DDR_BASE = 18'h10000;     // DDR2 word base of CB/DY workspace
     localparam COO_BASE = 0;                       // packed COO in SRAM (word[2k]={Acol,Arow}, word[2k+1]=Aval)
     localparam AA_BASE   = 4*L + 3*L*10;           // LDL array base in SRAM (109072); s_build writes band here
     // ---- Boot image segment bases/lengths (derived from the problem size, so
@@ -219,17 +224,18 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     wire sb_we;
     wire sb_sram_req, sb_sram_we; wire [17:0] sb_sram_waddr; wire [63:0] sb_sram_wdata;
     wire sb_sram_busy; wire [63:0] sb_sram_rdata;
-    generate if (SCALE_EN) begin : g_sb
+    generate if (SCALE_EN) begin : g_sb_blk
     s_build #(.N(N), .M(M), .NNZ(NNZ), .HB(HB), .MAXROW(6), .RAM_AW(RAM_AW),
-              .DY_OFFSET(DY_BASE), .COO_BASE(COO_BASE), .BAND_SRAM_BASE(AA_BASE)) u_sb(
+              .DY_OFFSET(DY_BASE), .DY_SRAM_BASE(WS_DDR_BASE + (DY_BASE - WS_BASE)),
+              .EXT_WS(EXT_WS), .COO_BASE(COO_BASE), .BAND_SRAM_BASE(AA_BASE)) u_sb(
         .clk(clk), .rst_n(rst_n), .start(sb_start),
-        .ram_addr(sb_addr), .ram_wdata(sb_wdata), .ram_we(sb_we), .ram_rdata(ram_rdata),
+        .ram_addr(sb_addr), .ram_wdata(sb_wdata), .ram_we(sb_we), .ram_rdata(64'h0),
         .sram_req(sb_sram_req), .sram_we(sb_sram_we), .sram_waddr(sb_sram_waddr),
         .sram_wdata(sb_sram_wdata), .sram_busy(sb_sram_busy), .sram_rdata(sb_sram_rdata),
         .done(sb_done),
         .mul0_a(sb_mul0_a), .mul0_b(sb_mul0_b), .mul0_o(pm0_o),
         .add0_a(sb_add0_a), .add0_b(sb_add0_b), .add0_sub(sb_add0_sub), .add0_o(pa0_o));
-    end else begin : g_sb_off
+    end else begin : g_sb_blk_off
         assign sb_done = 1'b0;
         assign sb_addr = {RAM_AW{1'b0}};
         assign sb_wdata = 64'h0;
@@ -246,7 +252,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     wire [12:0] saty_addr; wire [63:0] saty_wdata; wire saty_we, saty_done;   // 13-bit: spmv ram_addr width
     wire saty_sram_req, saty_sram_we; wire [17:0] saty_sram_waddr; wire [63:0] saty_sram_wdata;
     wire saty_sram_busy; wire [63:0] saty_sram_rdata;
-    generate if (SCALE_EN) begin : g_saty
+    generate if (SCALE_EN) begin : g_saty_blk
     spmv_fp64 #(.N(N), .M(M), .NNZ(NNZ), .transpose(1), .COO_BASE(COO_BASE)) u_saty(
         .clk(clk), .rst_n(rst_n), .start(saty_start), .x_in(saty_x_in), .din_valid(saty_din_valid),
         .ram_addr(saty_addr), .ram_wdata(saty_wdata), .ram_we(saty_we), .ram_rdata(ram_rdata),
@@ -255,7 +261,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
         .sram_wdata(saty_sram_wdata), .sram_busy(saty_sram_busy), .sram_rdata(saty_sram_rdata),
         .mul0_a(sy_mul0_a), .mul0_b(sy_mul0_b), .mul0_o(pm0_o),
         .add0_a(sy_add0_a), .add0_b(sy_add0_b), .add0_sub(sy_add0_sub), .add0_o(pa0_o));
-    end else begin : g_saty_off
+    end else begin : g_saty_blk_off
         assign saty_done = 1'b0;
         assign saty_addr = 13'h0;
         assign saty_wdata = 64'h0;
@@ -269,7 +275,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     wire [12:0] sax_addr; wire [63:0] sax_wdata; wire sax_we, sax_done;   // 13-bit: spmv ram_addr width
     wire sax_sram_req, sax_sram_we; wire [17:0] sax_sram_waddr; wire [63:0] sax_sram_wdata;
     wire sax_sram_busy; wire [63:0] sax_sram_rdata;
-    generate if (SCALE_EN) begin : g_sax
+    generate if (SCALE_EN) begin : g_sax_blk
     spmv_fp64 #(.N(N), .M(M), .NNZ(NNZ), .transpose(0), .COO_BASE(COO_BASE)) u_sax(
         .clk(clk), .rst_n(rst_n), .start(sax_start), .x_in(sax_x_in), .din_valid(sax_din_valid),
         .ram_addr(sax_addr), .ram_wdata(sax_wdata), .ram_we(sax_we), .ram_rdata(ram_rdata),
@@ -278,7 +284,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
         .sram_wdata(sax_sram_wdata), .sram_busy(sax_sram_busy), .sram_rdata(sax_sram_rdata),
         .mul0_a(sx_mul0_a), .mul0_b(sx_mul0_b), .mul0_o(pm0_o),
         .add0_a(sx_add0_a), .add0_b(sx_add0_b), .add0_sub(sx_add0_sub), .add0_o(pa0_o));
-    end else begin : g_sax_off
+    end else begin : g_sax_blk_off
         assign sax_done = 1'b0;
         assign sax_addr = 13'h0;
         assign sax_wdata = 64'h0;
@@ -343,7 +349,16 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     wire g_sb  = sb_sram_req     && !g_boot && !g_ldl && !g_sp1 && !g_sp2;
     wire g_saty= saty_sram_req   && !g_boot && !g_ldl && !g_sp1 && !g_sp2 && !g_sb;
     wire g_sax = sax_sram_req    && !g_boot && !g_ldl && !g_sp1 && !g_sp2 && !g_sb && !g_saty;
-    assign sram_req = g_boot | g_ldl | g_sp1 | g_sp2 | g_sb | g_saty | g_sax;
+    // EXT_WS: CB/DY workspace transactions from the main FSM. They only run in
+    // the boot/scale path, when the other six SRAM users are idle.
+    reg        ws_req;
+    reg        ws_we;
+    reg [17:0] ws_addr;
+    reg [63:0] ws_wdata;
+    wire sram_other_req = g_boot | g_ldl | g_sp1 | g_sp2 | g_sb | g_saty | g_sax;
+    wire sram_idle      = !sram_busy && !sram_other_req;
+    wire g_ws           = ws_req && sram_idle;
+    assign sram_req = sram_other_req | g_ws;
     reg sram_we_m; reg [17:0] sram_waddr_m; reg [63:0] sram_wdata_m;
     always @(*) begin
         if (g_boot) begin sram_we_m = 1'b1; sram_waddr_m = boot_sram_waddr; sram_wdata_m = boot_sram_wdata; end
@@ -352,11 +367,75 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
         else if (g_sp2) begin sram_we_m = ks_sp2_sram_we; sram_waddr_m = ks_sp2_sram_waddr; sram_wdata_m = ks_sp2_sram_wdata; end
         else if (g_sb) begin sram_we_m = sb_sram_we; sram_waddr_m = sb_sram_waddr; sram_wdata_m = sb_sram_wdata; end
         else if (g_saty) begin sram_we_m = saty_sram_we; sram_waddr_m = saty_sram_waddr; sram_wdata_m = saty_sram_wdata; end
-        else begin sram_we_m = sax_sram_we; sram_waddr_m = sax_sram_waddr; sram_wdata_m = sax_sram_wdata; end
+        else if (g_sax) begin sram_we_m = sax_sram_we; sram_waddr_m = sax_sram_waddr; sram_wdata_m = sax_sram_wdata; end
+        else begin sram_we_m = ws_we; sram_waddr_m = ws_addr; sram_wdata_m = ws_wdata; end
     end
     assign sram_we = sram_we_m;
     assign sram_waddr = sram_waddr_m;
     assign sram_wdata = sram_wdata_m;
+
+    // ---- EXT_WS: CB/DY workspace controller ----
+    // The main FSM accesses CB/DY only during boot and adaptive-scale updates.
+    // A workspace access freezes the main FSM until the DDR2 transaction
+    // completes; reads are returned through ws_rdata_r on the following cycle.
+    reg        ws_pending;
+    reg [1:0]  ws_state;
+    reg        ws_we_r;
+    reg [63:0] ws_rdata_r;
+    reg        ws_rdata_en;
+    wire       ws_addr_ext = (own_addr >= WS_BASE);
+    wire       ws_is_wait  = (st >= S_W1) && (st <= S_W85);
+    wire       ws_done     = EXT_WS && (ws_state == 2'd2) && !sram_busy;
+    wire       ws_req_now  = EXT_WS && !ws_pending && !ws_done &&
+                             ((own_we && ws_addr_ext) ||
+                              (ws_is_wait && ws_addr_ext && !own_we));
+    wire       ws_stall    = EXT_WS && (ws_req_now || (ws_pending && !ws_done));
+    wire [63:0] ram_rdata_m = (EXT_WS && ws_rdata_en) ? ws_rdata_r : ram_rdata;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            ws_req      <= 1'b0;
+            ws_we       <= 1'b0;
+            ws_addr     <= 18'd0;
+            ws_wdata    <= 64'd0;
+            ws_pending  <= 1'b0;
+            ws_state    <= 2'd0;
+            ws_we_r     <= 1'b0;
+            ws_rdata_r  <= 64'd0;
+            ws_rdata_en <= 1'b0;
+        end else begin
+            if (ws_rdata_en) ws_rdata_en <= 1'b0;
+            case (ws_state)
+            2'd0: begin
+                ws_req <= 1'b0;
+                if (ws_req_now && sram_idle) begin
+                    ws_req     <= 1'b1;
+                    ws_we      <= own_we;
+                    ws_we_r    <= own_we;
+                    ws_addr    <= WS_DDR_BASE + ({3'b0, own_addr} - WS_BASE);
+                    ws_wdata   <= own_wdata;
+                    ws_pending <= 1'b1;
+                    ws_state   <= 2'd1;
+                end
+            end
+            2'd1: begin
+                ws_req <= 1'b0;
+                if (sram_busy) ws_state <= 2'd2;
+            end
+            2'd2: begin
+                if (!sram_busy) begin
+                    ws_pending <= 1'b0;
+                    ws_state   <= 2'd0;
+                    if (!ws_we_r) begin
+                        ws_rdata_r  <= sram_rdata;
+                        ws_rdata_en <= 1'b1;
+                    end
+                end
+            end
+            endcase
+        end
+    end
+
     // busy/rdata broadcast: only the active user issues req and reads rdata
     assign ks_sram_busy     = sram_busy; assign ks_sram_rdata     = sram_rdata;
     assign ks_sp1_sram_busy = sram_busy; assign ks_sp1_sram_rdata = sram_rdata;
@@ -624,7 +703,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             ram_we = own_we;
         end
     end
-    assign pdc_rdata = ram_rdata;
+    assign pdc_rdata = ram_rdata_m;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -657,6 +736,8 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             n_log_r <= 0; last_scale_iter <= -16'd100; mod25_cnt <= 0; aty_i <= 0; c_i <= 0; ax_i <= 0; s_i <= 0; nb_i <= 0;
             logp_start <= 0; logd_start <= 0; exp_start <= 0;
             zmask_bits <= 0;
+        end else if (ws_stall) begin
+            // Freeze the main FSM while the EXT_WS controller completes CB/DY.
         end else begin
             ks_start <= 0; ks_band_valid <= 0; ks_din_valid <= 0;
             ks_ry_valid <= 0; ks_dy_valid <= 0; ks_par_update <= 0;
@@ -684,7 +765,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                     0: begin boot_sram_req <= 1; boot_sram_waddr <= COO_BASE + i; boot_sram_wdata <= flash_rdata; end
                     1: begin own_addr <= CB_BASE + i; own_wdata <= flash_rdata; own_we <= 1; end
                     2: begin own_addr <= CB_BASE + N + i; own_wdata <= flash_rdata; own_we <= 1; end
-                    3: begin own_addr <= ZMASK_BASE + i; own_wdata <= flash_rdata; own_we <= 1; end
+                    3: begin zmask_bits[i] <= (flash_rdata != 64'h0); end
                     4: begin boot_sram_req <= 1; boot_sram_waddr <= AA_BASE + i; boot_sram_wdata <= flash_rdata; end
                     default: begin own_addr <= G_BASE + i; own_wdata <= flash_rdata; own_we <= 1; end
                     endcase
@@ -712,12 +793,12 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             S_BOOT_DR: begin
                 if (i < N) begin own_addr <= DR_BASE + i; own_wdata <= RHO_X; own_we <= 1; end
                 else begin own_addr <= DR_BASE + N + M; own_wdata <= TAU_FACTOR; own_we <= 1; end
-                if (i + 1 >= N + 1) begin booting <= 1; st <= S_INIT0; end
+                if (i + 1 >= N + 1) begin booting <= 1; st <= S_SX0; end
                 else begin i <= i + 1; st <= S_BOOT_DR; end
             end
             // ---- boot: load zmask bits from DY area (just written from Flash) ----
             S_INIT0: begin i <= 0; own_addr <= ZMASK_BASE; st <= S_W11; end
-            S_INIT1: begin zm <= ram_rdata; st <= S_INIT2; end
+            S_INIT1: begin zm <= ram_rdata_m; st <= S_INIT2; end
             S_INIT2: begin
                 zmask_bits[i] <= (zm != 64'h0);
                 if (i + 1 >= M) st <= (booting ? S_SX0 : S_IDLE);
@@ -727,7 +808,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                 done <= 0;
                 scale_flow <= 0;
                 booting <= 0;
-                if (scale_valid && !scale_valid_p) begin scale_cur <= scale_r; i <= 0; own_addr <= ZMASK_BASE; st <= S_W1; end
+                if (scale_valid && !scale_valid_p) begin scale_cur <= scale_r; i <= 0; st <= S_SX0; end
                 else if (start) begin
                     if (iter == 0) begin i <= 0; own_addr <= V_BASE; st <= S_W13; end  // FEAS: v_prev=v0, no normalize
                     else begin i <= 0; own_addr <= V_BASE; st <= S_W15; end
@@ -736,7 +817,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             // ============ normalize v (iter>=1): pass1 ||v||, pass2 scale ====
             S_NM0: begin i <= 0; sqacc <= 0; own_addr <= V_BASE; st <= S_W16; end
             S_NM1: begin
-                vv <= ram_rdata; own_addr <= V_BASE + i + 1; st <= S_W17;
+                vv <= ram_rdata_m; own_addr <= V_BASE + i + 1; st <= S_W17;
             end
             S_NM2: begin a1 <= vv; b1 <= vv; st <= S_NM3; end       // vv^2
             S_NM3: begin
@@ -759,7 +840,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             S_NMRX: begin norm_r <= po1; st <= S_NMV0; end
             S_NMV0: begin i <= 0; own_addr <= V_BASE; st <= S_W19; end
             S_NMV1: begin
-                vv <= ram_rdata; own_addr <= V_BASE + i + 1; st <= S_W20;
+                vv <= ram_rdata_m; own_addr <= V_BASE + i + 1; st <= S_W20;
             end
             S_NMV2: begin a1 <= vv; b1 <= norm_r; st <= S_NMV3; end   // v*norm
             S_NMV3: begin
@@ -770,18 +851,6 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                 if (i + 1 >= L) begin i <= 0; own_addr <= V_BASE; st <= S_W21; end
                 else begin i <= i + 1; own_addr <= V_BASE + i + 1; st <= S_W22; end
             end
-            // ============ v_prev <- v (after normalize) ============
-            S_VPC0: begin i <= 0; own_addr <= V_BASE; st <= S_W7; end
-            S_W7: begin st <= S_VPC1; end
-            S_VPC1: begin vv <= ram_rdata; own_addr <= VPR_BASE + i; st <= S_W27; end
-            S_VPC2: begin
-                own_addr <= VPR_BASE + i; own_wdata <= vv; own_we <= 1; st <= S_VPC3;
-            end
-            S_VPC3: begin
-                if (i + 1 >= L) st <= S_KSSTART;
-                else begin i <= i + 1; own_addr <= V_BASE + i; st <= S_W8; end
-            end
-            S_W8: begin st <= S_VPC1; end
             // ============ KKT solve ============
             S_KSSTART: begin
                 ks_start <= 1; i <= 0;
@@ -797,14 +866,14 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             S_KSVX: begin own_addr <= V_BASE + i; st <= S_W9; end
             S_W9: begin st <= S_KSVXW; end
             S_KSVXW: begin
-                ks_x_in <= ram_rdata; ks_din_valid <= 1;
+                ks_x_in <= ram_rdata_m; ks_din_valid <= 1;
                 if (i + 1 >= N) begin i <= 0; st <= S_KSVY; end
                 else begin i <= i + 1; st <= S_KSVX; end
             end
             S_KSVY: begin own_addr <= V_BASE + N + i; st <= S_W10; end
             S_W10: begin st <= S_KSVYW; end
             S_KSVYW: begin
-                ks_x_in <= ram_rdata; ks_din_valid <= 1;
+                ks_x_in <= ram_rdata_m; ks_din_valid <= 1;
                 if (i + 1 >= M) begin i <= 0; st <= S_KSCAP; end
                 else begin i <= i + 1; st <= S_KSVY; end
             end
@@ -829,17 +898,17 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             end
             S_UTT: begin st <= S_GT0; end      // u_t[l-1] write lands here
             S_KSDONE_ETA: begin
-                v_eta <= ram_rdata; i <= 0; st <= S_RP0;
+                v_eta <= ram_rdata_m; i <= 0; st <= S_RP0;
             end
             // ============ root_plus (iter>=1): stream LM1 4-tuples ===========
             S_RP0: begin
                 rp_start <= 1; rp_eta <= v_eta; i <= 0; own_addr <= G_BASE; st <= S_W29;
             end
-            S_RP1: begin gv <= ram_rdata; own_addr <= UT_BASE + i; st <= S_W30; end
-            S_RP2: begin utv <= ram_rdata; own_addr <= V_BASE + i; st <= S_W31; end
-            S_RP3: begin vv <= ram_rdata; own_addr <= DR_BASE + i; st <= S_W32; end
+            S_RP1: begin gv <= ram_rdata_m; own_addr <= UT_BASE + i; st <= S_W30; end
+            S_RP2: begin utv <= ram_rdata_m; own_addr <= V_BASE + i; st <= S_W31; end
+            S_RP3: begin vv <= ram_rdata_m; own_addr <= DR_BASE + i; st <= S_W32; end
             S_RP4: begin
-                drv <= ram_rdata; st <= S_RP5;
+                drv <= ram_rdata_m; st <= S_RP5;
             end
             S_RP5: begin
                 rp_r <= drv; rp_g <= gv; rp_p <= utv; rp_mu <= vv; rp_dv <= 1;
@@ -856,8 +925,8 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             S_UTT2: begin st <= S_GT0; end      // u_t[l-1] write lands here
             // ============ u_t[:l-1] -= tau*g ============
             S_GT0: begin i <= 0; own_addr <= UT_BASE; st <= S_W34; end
-            S_GT1: begin utv <= ram_rdata; own_addr <= G_BASE + i; st <= S_W35; end
-            S_GT2: begin gv <= ram_rdata; st <= S_GT3; end
+            S_GT1: begin utv <= ram_rdata_m; own_addr <= G_BASE + i; st <= S_W35; end
+            S_GT2: begin gv <= ram_rdata_m; st <= S_GT3; end
             S_GT3: begin a1 <= tau_r; b1 <= gv; st <= S_GT4; end
             S_GT4: begin sa <= utv; sb <= po1; ssub <= 1; st <= S_GT5; end
             S_GT5: begin
@@ -869,8 +938,8 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             end
             // ============ u = 2*u_t - v ============
             S_U0: begin i <= 0; own_addr <= UT_BASE; st <= S_W37; end
-            S_U1: begin utv <= ram_rdata; own_addr <= V_BASE + i; st <= S_W38; end
-            S_U2: begin vv <= ram_rdata; a1 <= utv; b1 <= 64'h4000000000000000; st <= S_U3; end
+            S_U1: begin utv <= ram_rdata_m; own_addr <= V_BASE + i; st <= S_W38; end
+            S_U2: begin vv <= ram_rdata_m; a1 <= utv; b1 <= 64'h4000000000000000; st <= S_U3; end
             S_U3: begin sa <= po1; sb <= vv; ssub <= 1; st <= S_U4; end
             S_U4: begin
                 own_addr <= U_BASE + i; own_wdata <= so1; own_we <= 1;
@@ -891,7 +960,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                 end
             end
             // ============ u[l-1] = max(u[l-1], 0) (iter>=1) ============
-            S_UM0: begin vv <= ram_rdata; st <= S_UM1; end
+            S_UM0: begin vv <= ram_rdata_m; st <= S_UM1; end
             S_UM1: begin
                 own_addr <= U_BASE + LM1; own_wdata <= (vv[63] ? 64'h0 : vv);
                 own_we <= 1; st <= S_UMW;
@@ -899,11 +968,11 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             S_UMW: begin st <= S_RSK0; end
             // ============ rsk = (v+u-2*u_t)*diag_r ============
             S_RSK0: begin i <= 0; own_addr <= V_BASE; st <= S_W41; end
-            S_RSK1: begin vv <= ram_rdata; own_addr <= U_BASE + i; st <= S_W42; end
-            S_RSK2: begin utv <= ram_rdata; own_addr <= UT_BASE + i; st <= S_W43; end
-            S_RSK3: begin gv <= ram_rdata; own_addr <= DR_BASE + i; st <= S_W44; end
+            S_RSK1: begin vv <= ram_rdata_m; own_addr <= U_BASE + i; st <= S_W42; end
+            S_RSK2: begin utv <= ram_rdata_m; own_addr <= UT_BASE + i; st <= S_W43; end
+            S_RSK3: begin gv <= ram_rdata_m; own_addr <= DR_BASE + i; st <= S_W44; end
             S_RSK4: begin
-                drv <= ram_rdata; sc <= vv; sd <= utv; ssub2 <= 0; st <= S_RSK5;
+                drv <= ram_rdata_m; sc <= vv; sd <= utv; ssub2 <= 0; st <= S_RSK5;
             end
             S_RSK5: begin a1 <= gv; b1 <= 64'h4000000000000000; st <= S_RSK6; end
             S_RSK6: begin sa <= so2; sb <= po1; ssub <= 1; st <= S_RSK7; end
@@ -918,9 +987,9 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             end
             // ============ v += 1.5*(u - u_t) ============
             S_V0: begin i <= 0; own_addr <= U_BASE; st <= S_W46; end
-            S_V1: begin utv <= ram_rdata; own_addr <= UT_BASE + i; st <= S_W47; end
-            S_V2: begin gv <= ram_rdata; own_addr <= V_BASE + i; st <= S_W48; end
-            S_V3: begin vv <= ram_rdata; sa <= utv; sb <= gv; ssub <= 1; st <= S_V4; end
+            S_V1: begin utv <= ram_rdata_m; own_addr <= UT_BASE + i; st <= S_W47; end
+            S_V2: begin gv <= ram_rdata_m; own_addr <= V_BASE + i; st <= S_W48; end
+            S_V3: begin vv <= ram_rdata_m; sa <= utv; sb <= gv; ssub <= 1; st <= S_V4; end
             S_V4: begin a1 <= so1; b1 <= 64'h3FF8000000000000; st <= S_V5; end
             S_V5: begin sc <= vv; sd <= po1; ssub2 <= 0; st <= S_V6; end
             S_V6: begin
@@ -988,19 +1057,19 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             end
             // stream M r_y (DR_BASE+N) then M D_y (DY_BASE) into kkt_solve's arrays
             S_GKSRY0: begin
-                ks_ry_in <= ram_rdata; ks_ry_valid <= 1;
+                ks_ry_in <= ram_rdata_m; ks_ry_valid <= 1;
                 if (i + 1 >= M) begin i <= 0; own_addr <= DY_BASE; st <= S_W62; end
                 else begin i <= i + 1; own_addr <= DR_BASE + N + i + 1; st <= S_W63; end
             end
             S_GKSDY0: begin
-                ks_dy_in <= ram_rdata; ks_dy_valid <= 1;
+                ks_dy_in <= ram_rdata_m; ks_dy_valid <= 1;
                 if (i + 1 >= M) begin i <= 0; own_addr <= CB_BASE; st <= S_W3; end  // band pre-loaded; skip S_GKSB
                 else begin i <= i + 1; own_addr <= DY_BASE + i + 1; st <= S_W64; end
             end
             S_GKSB: begin
                 // phase 1: wait for LDL ready (in S_BAND), then present word_i
                 if (ks_band_ready) begin
-                    ks_band_in <= ram_rdata; ks_band_valid <= 1;
+                    ks_band_in <= ram_rdata_m; ks_band_valid <= 1;
                     st <= S_GKSBH;
                 end
                 // else: LDL busy -> hold without presenting (valid stays low)
@@ -1016,16 +1085,16 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                 // else: LDL still in S_BAND -> keep holding valid
             end
             // v_x[i] = c[i]/rho_x = c[i]*1e6  (1/rho_x = 1e6)
-            S_GKSVX0: begin a2 <= ram_rdata; b2 <= 64'h412E848000000000; st <= S_GKSVX1; end
+            S_GKSVX0: begin a2 <= ram_rdata_m; b2 <= 64'h412E848000000000; st <= S_GKSVX1; end
             S_GKSVX1: begin
                 ks_x_in <= po2; ks_din_valid <= 1;
                 if (i + 1 >= N) begin i <= 0; own_addr <= CB_BASE + N; st <= S_W66; end
                 else begin i <= i + 1; own_addr <= CB_BASE + i + 1; st <= S_W67; end
             end
             // v_y[i] = D_y[i]*b[i] = -D_y[i]*nb_r[i]  (nb_r = -b stored at CB_BASE+N)
-            S_GKSVY0: begin vd <= ram_rdata; own_addr <= DY_BASE + i; st <= S_W68; end
+            S_GKSVY0: begin vd <= ram_rdata_m; own_addr <= DY_BASE + i; st <= S_W68; end
             S_GKSVY1: begin
-                a1 <= vd; b1 <= (ram_rdata ^ 64'h8000000000000000); st <= S_GKSVY2;
+                a1 <= vd; b1 <= (ram_rdata_m ^ 64'h8000000000000000); st <= S_GKSVY2;
             end
             S_GKSVY2: begin
                 ks_x_in <= po1; ks_din_valid <= 1;
@@ -1043,17 +1112,17 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             end
             // ---- v remap: v = rsk/diag_r + 2*u_t - u (all l-1 elements) ----
             S_VR0: begin i <= 0; own_addr <= RSK_BASE; st <= S_W71; end
-            S_VR1: begin vr <= ram_rdata; own_addr <= DR_BASE + i; st <= S_W72; end
+            S_VR1: begin vr <= ram_rdata_m; own_addr <= DR_BASE + i; st <= S_W72; end
             S_VR2: begin
-                vd <= ram_rdata; div_a <= vr;
+                vd <= ram_rdata_m; div_a <= vr;
                 own_addr <= UT_BASE + i; st <= S_W73;
             end
             S_VR2B: begin
                 // div_b must use the fresh vd (vd updates at S_VR2) �?one cycle later
                 div_b <= vd; div_start <= 1; st <= S_VR3;
             end
-            S_VR3: begin vu <= ram_rdata; own_addr <= U_BASE + i; st <= S_W74; end
-            S_VR4: begin vv2 <= ram_rdata; a1 <= vu; b1 <= 64'h4000000000000000; st <= S_VR5; end
+            S_VR3: begin vu <= ram_rdata_m; own_addr <= U_BASE + i; st <= S_W74; end
+            S_VR4: begin vv2 <= ram_rdata_m; a1 <= vu; b1 <= 64'h4000000000000000; st <= S_VR5; end
             S_VR5: begin sa <= po1; sb <= vv2; ssub <= 1; st <= S_VR6; end
             S_VR6: begin
                 if (div_done) begin sc <= so1; sd <= div_o; ssub2 <= 0; st <= S_VR7; end
@@ -1088,7 +1157,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             // 4-cycle feed per element: RD(read u, own mux) -> FEED(spmv x_in) ->
             // SAMP(spmv samples din_valid, mux held) -> WR(spmv ram_we takes effect,
             // mux held) so the delayed spmv write and the u-read never collide.
-            S_SCLY0: begin saty_pf <= ram_rdata; st <= S_SCLY1; end
+            S_SCLY0: begin saty_pf <= ram_rdata_m; st <= S_SCLY1; end
             S_SCLY1: begin saty_x_in <= saty_pf; saty_din_valid <= 1; saty_active <= 1; st <= S_SCLY2; end
             S_SCLY2: begin saty_active <= 1; st <= S_SCLY3; end
             S_SCLY3: begin
@@ -1101,9 +1170,9 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                     i <= 0; own_addr <= U_BASE + LM1; st <= S_W5;
                 end
             end
-            S_SCLT: begin tau_scl <= ram_rdata; i <= 0; own_addr <= BAND_BASE + LMAX; st <= S_W78; end
-            S_SCLD0: begin aty_i <= ram_rdata; own_addr <= CB_BASE + i; st <= S_W79; end
-            S_SCLD1: begin c_i <= ram_rdata; a1 <= tau_scl; st <= S_SCLD1b; end
+            S_SCLT: begin tau_scl <= ram_rdata_m; i <= 0; own_addr <= BAND_BASE + LMAX; st <= S_W78; end
+            S_SCLD0: begin aty_i <= ram_rdata_m; own_addr <= CB_BASE + i; st <= S_W79; end
+            S_SCLD1: begin c_i <= ram_rdata_m; a1 <= tau_scl; st <= S_SCLD1b; end
             S_SCLD1b: begin b1 <= c_i; st <= S_SCLD2; end
             S_SCLD2: begin sa <= aty_i; sb <= po1; ssub <= 0; st <= S_SCLD3; end
             S_SCLD3: begin cmp_a <= {1'b0, aty_i[62:0]}; cmp_b <= max_aty; st <= S_SCLD4; end
@@ -1116,7 +1185,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                 if (i + 1 >= N) begin i <= 0; sax_start <= 1; own_addr <= U_BASE; st <= S_W80; end
                 else begin i <= i + 1; own_addr <= BAND_BASE + LMAX + i + 1; st <= S_W81; end
             end
-            S_SCLX0: begin sax_pf <= ram_rdata; st <= S_SCLX1; end
+            S_SCLX0: begin sax_pf <= ram_rdata_m; st <= S_SCLX1; end
             S_SCLX1: begin sax_x_in <= sax_pf; sax_din_valid <= 1; sax_active <= 1; st <= S_SCLX2; end
             S_SCLX2: begin sax_active <= 1; st <= S_SCLX3; end
             S_SCLX3: begin
@@ -1129,9 +1198,9 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                     i <= 0; own_addr <= BAND_BASE + LMAX; st <= S_W6;
                 end
             end
-            S_SCLP0: begin ax_i <= ram_rdata; own_addr <= RSK_BASE + N + i; st <= S_W83; end
-            S_SCLP1: begin s_i <= ram_rdata; own_addr <= CB_BASE + N + i; st <= S_W84; end
-            S_SCLP2: begin nb_i <= ram_rdata; a1 <= tau_scl; st <= S_SCLP2b; end
+            S_SCLP0: begin ax_i <= ram_rdata_m; own_addr <= RSK_BASE + N + i; st <= S_W83; end
+            S_SCLP1: begin s_i <= ram_rdata_m; own_addr <= CB_BASE + N + i; st <= S_W84; end
+            S_SCLP2: begin nb_i <= ram_rdata_m; a1 <= tau_scl; st <= S_SCLP2b; end
             S_SCLP2b: begin b1 <= nb_i; st <= S_SCLP3; end
             S_SCLP3: begin sa <= s_i; sb <= po1; ssub <= 0; st <= S_SCLP4; end      // s + tau*nb -> so1
             S_SCLP4: begin sc <= ax_i; sd <= so1; ssub2 <= 0; st <= S_SCLP5; end    // axs = ax + so1 -> so2
@@ -1227,14 +1296,14 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             // ---- sync-RAM read wait states ----
             S_W11: begin st <= S_INIT1; end
             S_W12: begin st <= S_INIT1; end
-            S_W13: begin st <= S_VPC0; end
+            S_W13: begin st <= S_KSSTART; end
             S_W15: begin st <= S_NM0; end
             S_W16: begin st <= S_NM1; end
             S_W17: begin st <= S_NM2; end
             S_W18: begin st <= S_NM1; end
             S_W19: begin st <= S_NMV1; end
             S_W20: begin st <= S_NMV2; end
-            S_W21: begin st <= S_VPC0; end
+            S_W21: begin st <= S_KSSTART; end
             S_W22: begin st <= S_NMV1; end
             S_W27: begin st <= S_VPC2; end
             S_W28: begin st <= S_KSDONE_ETA; end
