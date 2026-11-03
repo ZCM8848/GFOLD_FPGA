@@ -73,6 +73,23 @@ RAM 推断限制。
 `drs_iter` 新增 `MEM_IF=1`，把内部 SRAM 仲裁器直接暴露给 DDR2 适配器，
 不再例化 `sram64_ctrl` 物理引脚。
 
+## P&R 放置结果
+
+`phy_m6_core` 的 place 阶段：
+
+| 项 | 值 |
+|---|---:|
+| Slice | **16,488 / 21,216 (77.7%)** |
+| LUT6 | 16,469 / 21,216 (77.6%) |
+| ERAM | 104 / 108 |
+| DSP | 40 / 40 |
+| Setup WNS | **+3.763 ns** (0 violated) |
+| FMAX | 88.99 MHz |
+| Hold WNS | -0.328 ns (147 endpoints) |
+
+Hold 违例由 `drHoldFix on` 在 route 阶段处理（M5 也出现过类似负数报告，
+板级功能正常）。route/bitgen 本次运行尚未结束，bit 文件尚未产出。
+
 ## 尚未完成
 
 1. **启动镜像通道**：当前 `gfold_m6_core_top` 的 boot 端口是一个返回 0
@@ -80,7 +97,7 @@ RAM 推断限制。
    ETH 或 SPI Flash 写入 DDR2 地址 0，再让 boot FSM 读。
 2. **ETH/MCU 控制面**：LOAD/ACK/FINISH/START/STATUS/DUMP。
 3. **50k 迭代与 final_mass 验收**。
-4. P&R 时序结果（本次运行中）。
+4. route/bitgen 与上板 DDR2 适配器测试。
 
 ## 复现
 
