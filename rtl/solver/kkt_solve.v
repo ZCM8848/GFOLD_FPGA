@@ -6,7 +6,7 @@
 // by chaining the validated blocks: 2x spmv_fp64 (A^T and A) + 1x
 // banded_ldl_fp64_rb, orchestrated by this FSM. All arithmetic IEEE-754 FP64.
 // Phase 4a: the S band is now STREAMED IN (band_in/band_valid, (HB+1)*N words)
-// instead of $readmemh ï¿?the band can come from s_build at runtime, so the
+// instead of $readmemh ï¿½?the band can come from s_build at runtime, so the
 // adaptive-scaling loop can re-factorize with a rebuilt S (new D_y).
 //
 // RAM-port design (proj_dual_cone / spmv pattern): one shared external RAM
@@ -28,6 +28,9 @@ module kkt_solve #(
     parameter AA_BASE = 0,   // SRAM word offset for LDL arrays (past Anderson region)
     parameter COO_BASE = 0,  // SRAM word base of the packed COO (shared by spmv1/spmv2)
     parameter RAM_AW = 14,
+    parameter EXT_COEF = 0,          // 1: r_y/D_y live in external SRAM
+    parameter [17:0] COEF_RY_BASE = 18'h12000,
+    parameter [17:0] COEF_DY_BASE = 18'h14000,
     parameter RY_FILE   = "../data/kkt/small/r_y.hex",
     parameter DY_FILE   = "../data/kkt/small/Dy.hex"
 )(
@@ -71,6 +74,12 @@ module kkt_solve #(
     output wire  [63:0]   sp2_sram_wdata,
     input  wire          sp2_sram_busy,
     input  wire [63:0]   sp2_sram_rdata,
+    // ---- external r_y / D_y coefficients (EXT_COEF=1) ----
+    output reg           coef_req, coef_we,
+    output reg  [17:0]   coef_addr,
+    output reg  [63:0]   coef_wdata,
+    input  wire          coef_busy,
+    input  wire [63:0]   coef_rdata,
     // ---- LDL band ready (back-pressure to the upstream band streamer) ----
     output wire           band_ready,
     // Pool channels (muxed to own/spmv1/spmv2/ldl internally)
@@ -154,6 +163,32 @@ module kkt_solve #(
         .div_start(ldl_ds), .div_a(ldl_da), .div_b(ldl_db), .div_done(ldl_ddone), .div_o(ldl_do));
     assign band_ready = ldl_band_ready_w;   // back-pressure to the band streamer
 
+    // ---- external coefficient handshake (EXT_COEF=1) ----
+    reg        coef_start;
+    reg        coef_done_r;
+    reg [1:0]  cst;
+    wire       coef_done = coef_done_r;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            coef_req <= 1'b0; cst <= 2'd0; coef_done_r <= 1'b0;
+        end else begin
+            coef_done_r <= 1'b0;
+            case (cst)
+            2'd0: begin
+                if (coef_start) begin coef_req <= 1'b1; cst <= 2'd1; end
+                else coef_req <= 1'b0;
+            end
+            2'd1: begin
+                coef_req <= 1'b0;
+                if (coef_busy) cst <= 2'd2;
+            end
+            2'd2: begin
+                if (!coef_busy) begin coef_done_r <= 1'b1; cst <= 2'd0; end
+            end
+            endcase
+        end
+    end
+
     // ---- own FP64 arithmetic via pool (rhs + zy, sequential) ----
     reg [63:0] vx_i, atvy_i, po_rhs_r;
     reg [63:0] az_r, vy_r, ry_reg, dy_reg, zy1_r, zy2_r;
@@ -205,7 +240,7 @@ module kkt_solve #(
                S_SP2START=12, S_SP2FEED=13, S_SP2WAIT=14,
                 S_ZY0=15, S_ZY1=16, S_ZY1R=29, S_ZY2=17, S_ZY2R=30, S_ZY3=18, S_ZY3b=33, S_ZY4=19,
                S_ZOUT0=20, S_ZOUT1=21, S_ZOUT1R=31, S_ZYOUT0=22, S_ZYOUT1=23, S_ZYOUT1R=32, S_DONE=24,
-               S_DYRY=25, S_DYDY=26;
+               S_DYRY=25, S_DYDY=26, S_ZY0W=35, S_ZY0D=36;
     reg [5:0] st;
     reg [15:0] wp, i, r, zo;
     reg [RAM_AW-1:0] own_addr;
@@ -233,6 +268,7 @@ module kkt_solve #(
         if (!rst_n) begin
             st <= S_IDLE; done <= 0; o_valid <= 0;
             own_addr <= 0; own_wdata <= 0; own_we <= 0;
+            coef_start <= 0; coef_we <= 0; coef_addr <= 0; coef_wdata <= 0;
             sp1_start <= 0; sp1_din_valid <= 0; sp1_x_in <= 0;
             sp2_start <= 0; sp2_din_valid <= 0; sp2_x_in <= 0;
             ldl_start <= 0; ldl_band_valid <= 0; ldl_band_in <= 0;
@@ -242,6 +278,7 @@ module kkt_solve #(
             ry_reg <= 0; dy_reg <= 0; zy1_r <= 0; zy2_r <= 0; po_rhs_r <= 0;
         end else begin
             o_valid <= 0; own_we <= 0;
+            coef_start <= 0; coef_we <= 0;
             sp1_din_valid <= 0; sp2_din_valid <= 0;
             ldl_rhs_valid <= 0; ldl_start <= 0;
             if (ldl_band_valid && !ldl_band_ready_w) ldl_band_valid <= 0;   // clear after LDL sampled
@@ -359,8 +396,26 @@ module kkt_solve #(
             end
             // ---- zy[r] = Dy[r]*(az[r] + r_y[r]*vy[r]), 4 cyc/elem, in place ----
             S_ZY0: begin
-                ry_reg <= r_y_arr[r]; dy_reg <= Dy_arr[r];
-                own_addr <= AD_AZ + r; st <= S_ZY1;
+                if (EXT_COEF) begin
+                    coef_start <= 1; coef_we <= 0; coef_addr <= COEF_RY_BASE + r;
+                    st <= S_ZY0W;
+                end else begin
+                    ry_reg <= r_y_arr[r]; dy_reg <= Dy_arr[r];
+                    own_addr <= AD_AZ + r; st <= S_ZY1;
+                end
+            end
+            S_ZY0W: begin
+                if (coef_done) begin
+                    ry_reg <= coef_rdata;
+                    coef_start <= 1; coef_we <= 0; coef_addr <= COEF_DY_BASE + r;
+                    st <= S_ZY0D;
+                end
+            end
+            S_ZY0D: begin
+                if (coef_done) begin
+                    dy_reg <= coef_rdata;
+                    own_addr <= AD_AZ + r; st <= S_ZY1;
+                end
             end
             S_ZY1: begin st <= S_ZY1R; end   // sync-read wait: kmem rdata for AD_AZ+r
             S_ZY1R: begin az_r <= ram_rdata; own_addr <= r; st <= S_ZY2; end

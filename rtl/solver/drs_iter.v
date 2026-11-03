@@ -37,6 +37,7 @@ module drs_iter #(
     ,parameter SRAM_AW = 18   // external SRAM word-address width (18 = 2MB; 12 = on-chip demo)
     ,parameter SCALE_EN = 1   // 0: omit adaptive-scale datapath (s_build + 2 spmv)
     ,parameter EXT_WS = 0     // 1: CB/DY workspace lives in external DDR2; BAND stays on-chip
+    ,parameter EXT_COEF = 0   // 1: kkt_solve reads r_y/D_y from external SRAM
     ,parameter RY_FILE = "../data/kkt/full/r_y_r.hex",
     parameter DY_FILE = "../data/kkt/full/Dy_r.hex"
     ,parameter NODE = 100, Z0 = 14, ZP = 7, NP = 3
@@ -98,8 +99,11 @@ module drs_iter #(
     localparam WS_BASE   = BAND_BASE + 2 * LMAX;  // first external-workspace address
     localparam CB_BASE   = ((WS_BASE + 255) / 256) * 256; // external c/-b
     localparam DY_BASE   = CB_BASE + LM1;          // external D_y
+    localparam RY_BASE   = DY_BASE + M;            // external r_y copy for kkt_solve
     localparam ZMASK_BASE = DY_BASE;  // zmask is captured into zmask_bits at boot; address unused
-    localparam [17:0] WS_DDR_BASE = 18'h10000;     // DDR2 word base of CB/DY workspace
+    localparam [17:0] WS_DDR_BASE = 18'h10000;     // DDR2 word base of CB/DY/RY workspace
+    localparam [17:0] COEF_RY_BASE = WS_DDR_BASE + (RY_BASE - WS_BASE);
+    localparam [17:0] COEF_DY_BASE = WS_DDR_BASE + (DY_BASE - WS_BASE);
     localparam COO_BASE = 0;                       // packed COO in SRAM (word[2k]={Acol,Arow}, word[2k+1]=Aval)
     localparam AA_BASE   = 4*L + 3*L*10;           // LDL array base in SRAM (109072); s_build writes band here
     // ---- Boot image segment bases/lengths (derived from the problem size, so
@@ -139,7 +143,7 @@ module drs_iter #(
  S_SG6=91, S_SG7=92, S_SG8=93, S_SG9=94,
  S_SC0=95, S_SC1=96, S_SC2=97, S_SC3=98,
  S_SCP0=99, S_SCP1=100, S_SCP2=101, S_SCP3=102,
- S_SX0=110, S_SX1=111, S_SX2=112, S_SX3=113, S_SX4=114, S_SX5=115, S_SX6=138,
+ S_SX0=110, S_SX1=111, S_SX2=112, S_SX3=113, S_SX4=114, S_SX4B=304, S_SX5=115, S_SX6=138,
  S_SB=116, S_SBW=117,
  S_GKS0=118, S_GKSB=119, S_GKSVX=120, S_GKSVXW=121, S_GKSVY=122, S_GKSVYW=123,
  S_GKSZ=124, S_GKSD=125,
@@ -193,8 +197,12 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
         else band_valid_p <= band_valid;
     end
     wire band_valid_rise = band_valid && !band_valid_p;   // one sample per tb word
+    wire        ks_coef_req, ks_coef_we;
+    wire [17:0] ks_coef_addr;
+    wire [63:0] ks_coef_wdata;
     kkt_solve #(.N(N), .M(M), .NNZ(NNZ), .HB(HB),
                 .AA_BASE(AA_BASE), .COO_BASE(COO_BASE),
+                .EXT_COEF(EXT_COEF), .COEF_RY_BASE(COEF_RY_BASE), .COEF_DY_BASE(COEF_DY_BASE),
                 .RY_FILE(RY_FILE), .DY_FILE(DY_FILE)) u_ks(
         .clk(clk), .rst_n(rst_n), .start(ks_start),
         .band_in(ks_band_in), .band_valid(ks_band_valid), .refactor(ks_refactor),
@@ -210,6 +218,8 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
         .sp1_sram_wdata(ks_sp1_sram_wdata), .sp1_sram_busy(ks_sp1_sram_busy), .sp1_sram_rdata(ks_sp1_sram_rdata),
         .sp2_sram_req(ks_sp2_sram_req), .sp2_sram_we(ks_sp2_sram_we), .sp2_sram_waddr(ks_sp2_sram_waddr),
         .sp2_sram_wdata(ks_sp2_sram_wdata), .sp2_sram_busy(ks_sp2_sram_busy), .sp2_sram_rdata(ks_sp2_sram_rdata),
+        .coef_req(ks_coef_req), .coef_we(ks_coef_we), .coef_addr(ks_coef_addr),
+        .coef_wdata(ks_coef_wdata), .coef_busy(sram_busy), .coef_rdata(sram_rdata),
         .band_ready(ks_band_ready),
         .mul0_a(ks_mul0_a), .mul0_b(ks_mul0_b), .mul0_o(pm0_o),
         .add0_a(ks_add0_a), .add0_b(ks_add0_b), .add0_sub(ks_add0_sub), .add0_o(pa0_o),
@@ -349,13 +359,14 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     wire g_sb  = sb_sram_req     && !g_boot && !g_ldl && !g_sp1 && !g_sp2;
     wire g_saty= saty_sram_req   && !g_boot && !g_ldl && !g_sp1 && !g_sp2 && !g_sb;
     wire g_sax = sax_sram_req    && !g_boot && !g_ldl && !g_sp1 && !g_sp2 && !g_sb && !g_saty;
+    wire g_coef= ks_coef_req     && !g_boot && !g_ldl && !g_sp1 && !g_sp2 && !g_sb && !g_saty && !g_sax;
     // EXT_WS: CB/DY workspace transactions from the main FSM. They only run in
     // the boot/scale path, when the other six SRAM users are idle.
     reg        ws_req;
     reg        ws_we;
     reg [17:0] ws_addr;
     reg [63:0] ws_wdata;
-    wire sram_other_req = g_boot | g_ldl | g_sp1 | g_sp2 | g_sb | g_saty | g_sax;
+    wire sram_other_req = g_boot | g_ldl | g_sp1 | g_sp2 | g_sb | g_saty | g_sax | g_coef;
     wire sram_idle      = !sram_busy && !sram_other_req;
     wire g_ws           = ws_req && sram_idle;
     assign sram_req = sram_other_req | g_ws;
@@ -368,6 +379,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
         else if (g_sb) begin sram_we_m = sb_sram_we; sram_waddr_m = sb_sram_waddr; sram_wdata_m = sb_sram_wdata; end
         else if (g_saty) begin sram_we_m = saty_sram_we; sram_waddr_m = saty_sram_waddr; sram_wdata_m = saty_sram_wdata; end
         else if (g_sax) begin sram_we_m = sax_sram_we; sram_waddr_m = sax_sram_waddr; sram_wdata_m = sax_sram_wdata; end
+        else if (g_coef) begin sram_we_m = ks_coef_we; sram_waddr_m = ks_coef_addr; sram_wdata_m = ks_coef_wdata; end
         else begin sram_we_m = ws_we; sram_waddr_m = ws_addr; sram_wdata_m = ws_wdata; end
     end
     assign sram_we = sram_we_m;
@@ -628,7 +640,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
     reg [M-1:0] zmask_bits;
     reg sflag;
  reg rs_done_p;
- reg [63:0] rinv, zm, vr, vd, vu, vv2;
+ reg [63:0] rinv, zm, vr, vd, vu, vv2, ry_val;
  reg scale_valid_p;   // prev scale_valid, for rising-edge detection (level-safe trigger)
  reg scale_flow;      // 1 while the scale-update chain runs (suppress residual check at its S_DONE)
  // ---- adaptive-scale residual / decision regs ----
@@ -726,7 +738,7 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             sflag <= 0;
             cmp_a <= 0; cmp_b <= 0;
             rs_done_p <= 0;
-            rinv <= 0; zm <= 0; vr <= 0; vd <= 0; vu <= 0; vv2 <= 0;
+            rinv <= 0; zm <= 0; vr <= 0; vd <= 0; vu <= 0; vv2 <= 0; ry_val <= 0;
             sb_start <= 0; gks_active <= 0; scale_valid_p <= 0; scale_flow <= 0;
             saty_start <= 0; saty_din_valid <= 0; saty_x_in <= 0; saty_active <= 0;
             sax_start <= 0; sax_din_valid <= 0; sax_x_in <= 0; sax_active <= 0;
@@ -1026,7 +1038,12 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
                 st <= S_SX4;
             end
             S_SX4: begin
-                own_addr <= DR_BASE + N + i; own_wdata <= po1; own_we <= 1; st <= S_SX5;
+                ry_val <= po1;
+                own_addr <= DR_BASE + N + i; own_wdata <= po1; own_we <= 1; st <= S_SX4B;
+            end
+            // Keep a copy of r_y in the external workspace for kkt_solve's zy.
+            S_SX4B: begin
+                own_addr <= RY_BASE + i; own_wdata <= ry_val; own_we <= 1; st <= S_SX5;
             end
             S_SX5: begin
                 // write D_y �?must be its OWN state: the else-branch ZMASK forward
@@ -1052,8 +1069,14 @@ S_INIT0=146, S_INIT1=147, S_INIT2=148,
             // vs SW -449.98). Also stream the NEW r_y/D_y (par_update) so zy uses the
             // rescaled D_y, not the static scale=1 arrays.
             S_GKS0: begin
-                ks_start <= 1; gks_active <= 1; ks_par_update <= 1;
-                i <= 0; own_addr <= DR_BASE + N; st <= S_W61;
+                ks_start <= 1; gks_active <= 1;
+                if (EXT_COEF) begin
+                    ks_par_update <= 1'b0;
+                    i <= 0; own_addr <= CB_BASE; st <= S_W3;
+                end else begin
+                    ks_par_update <= 1'b1;
+                    i <= 0; own_addr <= DR_BASE + N; st <= S_W61;
+                end
             end
             // stream M r_y (DR_BASE+N) then M D_y (DY_BASE) into kkt_solve's arrays
             S_GKSRY0: begin

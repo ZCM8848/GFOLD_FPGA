@@ -36,7 +36,7 @@ module tb_drs_iter;
     reg [7:0] fl_mem [0:303095];   // 37887 words * 8 bytes
     assign fl_dq = (!fl_ce_n && !fl_oe_n && fl_addr < 303096) ? fl_mem[fl_addr] : 8'hz;
 
-    drs_iter #(.N(N), .M(M), .NNZ(NNZ), .HB(HB), .EXT_WS(EXT_WS)) dut(
+    drs_iter #(.N(N), .M(M), .NNZ(NNZ), .HB(HB), .EXT_WS(EXT_WS), .EXT_COEF(1)) dut(
         .clk(clk), .rst_n(rst_n), .start(start),
         .refactor(refactor), .band_in(band_in), .band_valid(band_valid), .iter(iter),
         .scale_valid(scale_valid), .scale_r(scale_r),
@@ -128,6 +128,7 @@ module tb_drs_iter;
     endtask
 
     initial begin
+
         $readmemh("../data/kkt/full/g.hex", g_ref);
         $readmemh("../data/kkt/full/diag_r.hex", dr_ref);
         $readmemh("../data/kkt/full/zmask.hex", zmask_ref);
