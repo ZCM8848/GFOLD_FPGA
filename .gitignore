@@ -156,3 +156,8 @@ anlogic/td_project/phy_m5/.*.f
 anlogic/td_project/phy_m5/*.bit
 anlogic/td_project/phy_m5/place_flow.status
 anlogic/td_project/phy_m5/route_flow.status
+anlogic/td_project/phy_m5/*.area
+anlogic/td_project/phy_m5/*.timing
+anlogic/td_project/phy_m5/*.qor
+anlogic/td_project/phy_m5/*_clock_utilization.txt
+anlogic/td_project/syn_m5/*.qor
