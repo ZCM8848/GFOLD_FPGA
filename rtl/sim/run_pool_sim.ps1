@@ -1,4 +1,4 @@
-# run_pool_sim.ps1 â€?milestone-5 regression: PH1P35 pool-based drs_iter,
+# run_pool_sim.ps1 ï¿½?milestone-5 regression: PH1P35 pool-based drs_iter,
 # 2 DRS iterations, compare VS1/VS2 against the golden reference with check_drs.py.
 #
 # Requires Icarus Verilog (this machine: D:\iverilog\bin) and the golden data in
@@ -23,4 +23,5 @@ $v2 = ($lines | Where-Object { $_ -match "^VS2:" }) -replace "^VS2:", "V2:"
 Set-Content (Join-Path $wt "rtl\data\pool_sim_dump.txt") -Value @($v1, $v2) -Encoding ascii
 
 $env:PYTHONPATH = $wt
+Set-Location $wt
 & python (Join-Path $wt "software\check_drs.py") (Join-Path $wt "rtl\data\pool_sim_dump.txt")
