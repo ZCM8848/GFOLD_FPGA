@@ -161,3 +161,4 @@ anlogic/td_project/phy_m5/*.timing
 anlogic/td_project/phy_m5/*.qor
 anlogic/td_project/phy_m5/*_clock_utilization.txt
 anlogic/td_project/syn_m5/*.qor
+rtl/sim/*_frame.hex
