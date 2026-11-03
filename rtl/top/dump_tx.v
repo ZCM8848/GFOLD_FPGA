@@ -31,6 +31,7 @@ module dump_tx #(
                S_IFG   = 3'd4;
 
     reg [2:0]  st;
+    reg [7:0]  crc_data;   // registered CRC input: keeps the deep b-mux out of the 125MHz CRC path
     reg [10:0] idx;
     reg [3:0]  ifg_cnt;
     reg        crc_init;
@@ -57,7 +58,7 @@ module dump_tx #(
 
     // CRC
     wire [31:0] crc, crc_next;
-    wire        crc_en = (st == S_TX) && (idx >= 11'd8) && (idx < idx_fcs);
+    wire        crc_en = (st == S_TX) && (idx >= 11'd9) && (idx <= idx_fcs);
 
     // payload 字节偏移
     wire [10:0] pay_off = idx - idx_payload;       // 0..nwords*8-1
@@ -103,7 +104,7 @@ module dump_tx #(
         if (idx >= idx_payload && idx < idx_fcs)
             b = dbuf[word_idx][byte_idx*8 +: 8];
         // FCS
-        if (idx == idx_fcs)       b = ~crc[7:0];
+        if (idx == idx_fcs)       b = ~crc_next[7:0];   // CRC lags one byte (crc_data pipeline)
         if (idx == idx_fcs + 11'd1) b = ~crc[15:8];
         if (idx == idx_fcs + 11'd2) b = ~crc[23:16];
         if (idx == idx_fcs + 11'd3) b = ~crc[31:24];
@@ -111,7 +112,15 @@ module dump_tx #(
 
     crc32_eth_nib u_crc (
         .clk(clk), .rst_n(rst_n), .init(crc_init), .en(crc_en),
-        .data(b), .crc(crc), .crc_next(crc_next));
+        .data(crc_data), .crc(crc), .crc_next(crc_next));
+
+    // Register the byte feeding the CRC. The u_crc path is now
+    // crc_data -> nibble LUTs -> crc_reg, so the deep header/payload
+    // mux only has to reach a register (fixes the 125MHz -1.25ns path).
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) crc_data <= 8'h0;
+        else        crc_data <= b;
+    end
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
