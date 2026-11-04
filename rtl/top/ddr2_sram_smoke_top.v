@@ -56,7 +56,7 @@ module ddr2_sram_smoke_top (
     reg pass, fail;
     reg [25:0] hb;
 
-    wire [63:0] pattern = {8{16'hA5A5 ^ {8{idx[7:0]}}}};
+    wire [63:0] pattern = {8{16'hA5A5 ^ {8{3'b0, idx}}}};
 
     always @(posedge I_sys_clk or negedge sys_rst_n) begin
         if (!sys_rst_n) begin
