@@ -19,8 +19,9 @@ module rx_proto #(
     output reg [15:0]  rx_frame_cnt,
     output reg [31:0]  fin_actual_crc, output reg [31:0] fin_actual_words,
     output reg [7:0]   fin_status, output reg img_valid,
-    // image_ram 写口
-    output reg         img_wen, output reg [9:0] img_waddr, output reg [63:0] img_wdata,
+    // image write port (16-bit global word address)
+    output reg         img_wen, output reg [15:0] img_waddr, output reg [63:0] img_wdata,
+    output reg  [15:0] img_base, output reg [15:0] img_nwords, output reg img_start,
     // DUMP
     output reg         dump_req, output reg [9:0] dump_start_out, output reg [3:0] dump_nwords_out
 );
@@ -67,7 +68,7 @@ module rx_proto #(
             word_cnt<=0; crc_init_pulse<=0; img_valid<=0;
             fin_actual_crc<=0; fin_actual_words<=0; fin_status<=0;
             word_shift<=0; byte_cnt<=0; word_addr<=0; img_wen<=0;
-            img_waddr<=0; img_wdata<=0;
+            img_waddr<=0; img_wdata<=0; img_base<=0; img_nwords<=0; img_start<=0;
             dump_start_r<=0; dump_nwords_r<=0;
             dump_start_out<=0; dump_nwords_out<=0;
             rx_frame_cnt<=0;
@@ -76,7 +77,7 @@ module rx_proto #(
             icmp_id<=0; icmp_seq<=0; icmp_data_len<=0;
             udp_sender_mac<=0; udp_sender_ip<=0; udp_src_port<=0; udp_app_type<=0; udp_app_seq<=0;
         end else begin
-            arp_req<=0; icmp_req<=0; udp_cmd_req<=0; dump_req<=0; img_wen<=0;
+            arp_req<=0; icmp_req<=0; udp_cmd_req<=0; dump_req<=0; img_wen<=0; img_start<=0;
             crc_init_pulse<=0;
 
             if (frame_start) begin
@@ -121,7 +122,14 @@ module rx_proto #(
                         app_nwords_r[15:8]<=frame_data;
                         if(is_load) word_addr<=app_seq_r*16'd180;
                     end
-                    11'd49:app_nwords_r[7:0]<=frame_data;
+                    11'd49:begin
+                        app_nwords_r[7:0]<=frame_data;
+                        if (is_load) begin
+                            img_base   <= word_addr;
+                            img_nwords <= {app_nwords_r[15:8], frame_data};
+                            img_start  <= 1'b1;
+                        end
+                    end
                     // FINISH / DUMP payload（idx 50-57）
                     11'd50:begin if(is_finish)fin_exp_words_r[7:0]<=frame_data; if(is_dump)dump_start_r[7:0]<=frame_data; end
                     11'd51:begin if(is_finish)fin_exp_words_r[15:8]<=frame_data; if(is_dump)dump_start_r[15:8]<=frame_data; end
@@ -139,7 +147,7 @@ module rx_proto #(
                     word_shift <= {frame_data, word_shift[63:8]};
                     if (byte_cnt == 3'd7) begin
                         img_wen   <= 1'b1;
-                        img_waddr <= word_addr[9:0];
+                        img_waddr <= word_addr[15:0];
                         img_wdata <= {frame_data, word_shift[63:8]};
                         word_addr <= word_addr + 16'd1;
                         byte_cnt  <= 3'd0;

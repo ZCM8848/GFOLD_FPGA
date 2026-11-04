@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""gfold_eth.py — GFOLD 以太网控制台"""
+"""gfold_eth.py �?GFOLD 以太网控制台"""
 import socket, struct, sys, time, zlib, os
 
 MAGIC   = 0x4746
@@ -55,7 +55,7 @@ def cmd_load(image_path=None):
     sock.settimeout(1.0)
     try: sock.recvfrom(2048)
     except: pass
-    time.sleep(0.1)
+    time.sleep(0.5)
     print(f"LOAD {npkts} pkts...")
     for seq in range(npkts):
         nw = wpk if seq < nfull else last
@@ -71,8 +71,12 @@ def cmd_load(image_path=None):
             except: pass
         else:
             print(f"  seq={seq} FAILED"); sock.close(); return False
+        # M6: the packet FIFO drains to DDR2 at 25 MHz. Give the writer time
+        # before the next 180-word packet arrives.
+        time.sleep(0.002)
         if (seq+1) % 50 == 0 or seq == npkts-1: print(f"  {seq+1}/{npkts}")
     print("FINISH...")
+    time.sleep(0.01)   # let the final packet drain to DDR2
     fin_pkt = make_header(0x03, nwords=2) + struct.pack('<II', total_words, expected_crc)
     sock.sendto(fin_pkt, (FPGA_IP, PORT))
     sock.settimeout(5.0)
@@ -124,7 +128,7 @@ def cmd_loadtest():
     sock.settimeout(1.0)
     try: sock.recvfrom(2048)
     except: pass
-    time.sleep(0.1)
+    time.sleep(0.5)
     # LOAD 5 packets
     for seq in range(5):
         pkt = make_header(0x01, seq=seq, nwords=180) + image[seq*1440:(seq+1)*1440]
@@ -234,6 +238,16 @@ def cmd_check(image_path, wait=0.5):
     print("SMALL-PROBLEM CHECK:", "PASS" if ok else "FAIL")
     return ok
 
+def cmd_mass():
+    words = cmd_dump(0, 2)
+    if not words:
+        return False
+    raw = words[0]
+    it = words[1] & 0xFFFF if len(words) > 1 else -1
+    val = _d(raw)
+    print(f"MASS iter={it} raw=0x{raw:016X} log={val:.12g} exp={pow(2.718281828459045, val):.6f}")
+    return True
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else 'ping'
     if cmd == 'ping':
@@ -250,13 +264,15 @@ def main():
         sys.exit(0 if cmd_loadtest() else 1)
     elif cmd == 'start':
         cmd_start()
+    elif cmd == 'mass':
+        sys.exit(0 if cmd_mass() else 1)
     elif cmd == 'check':
         p = sys.argv[2] if len(sys.argv) > 2 else os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "..", "rtl", "data", "kkt", "small2", "flash_image.bin")
         w = float(sys.argv[3]) if len(sys.argv) > 3 else 0.5
         sys.exit(0 if cmd_check(p, w) else 1)
     else:
-        print("commands: ping [n] | load [path] | dump [start] [n] | loadtest | start | check [image.bin] [wait_s]")
+        print("commands: ping [n] | load [path] | dump [start] [n] | loadtest | start | mass | check [image.bin] [wait_s]")
         sys.exit(1)
 
 if __name__ == '__main__':

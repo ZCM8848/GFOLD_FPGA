@@ -1,6 +1,5 @@
-// dump_tx.v — DUMP_DATA UDP 帧发送器（clk_125 域）
-// 预读最多 10 个 64 位字，发送一个 UDP/IP 帧。
-`timescale 1ns/1ps
+// dump_tx.v �?DUMP_DATA UDP 帧发送器（clk_125 域）
+// 预读最�?10 �?64 位字，发送一�?UDP/IP 帧�?`timescale 1ns/1ps
 
 module dump_tx #(
     parameter [47:0] LOCAL_MAC = 48'h02_00_00_00_00_01,
@@ -36,20 +35,19 @@ module dump_tx #(
     reg [3:0]  ifg_cnt;
     reg        crc_init;
     reg [3:0]  rd_idx;      // 预读索引
-    reg [63:0] dbuf [0:9];    // 字缓冲
+    reg [63:0] dbuf [0:9];
     reg [3:0]  nwords_r;
 
     assign busy = (st != S_IDLE);
 
     // 帧布局参数
-    wire [15:0] ip_total = {8'd0, nwords_r} * 16'd8 + 16'd36;  // 20+8+8+nwords*8
-    wire [15:0] udp_len   = {8'd0, nwords_r} * 16'd8 + 16'd16;  // 8+8+nwords*8
+    reg [15:0] ip_total_r, udp_len_r, ip_ck_r;
+    reg [10:0] idx_fcs_r, idx_fcs1_r, idx_fcs2_r, idx_fcs3_r, idx_end_r;
     wire [10:0] idx_payload = 11'd58;  // payload 起始
-    wire [10:0] idx_fcs = 11'd58 + {{7'd0, nwords_r} << 3};     // FCS 起始
-    wire [10:0] idx_end = idx_fcs + 11'd4;
 
-    // IP checksum
-    wire [31:0] ip_sum = 32'h4500 + {16'd0, ip_total} + 32'h4011
+    // IP checksum (uses registered lengths; keeps the nwords->TX mux out of
+    // the 125 MHz setup path).
+    wire [31:0] ip_sum = 32'h4500 + {16'd0, ip_total_r} + 32'h4011
                        + {16'd0, LOCAL_IP[31:16]} + {16'd0, LOCAL_IP[15:0]}
                        + {16'd0, dst_ip[31:16]}   + {16'd0, dst_ip[15:0]};
     wire [16:0] ip_f1  = ip_sum[15:0] + ip_sum[31:16];
@@ -58,7 +56,7 @@ module dump_tx #(
 
     // CRC
     wire [31:0] crc, crc_next;
-    wire        crc_en = (st == S_TX) && (idx >= 11'd9) && (idx <= idx_fcs);
+    wire        crc_en = (st == S_TX) && (idx >= 11'd9) && (idx <= idx_fcs_r);
 
     // payload 字节偏移
     wire [10:0] pay_off = idx - idx_payload;       // 0..nwords*8-1
@@ -79,18 +77,18 @@ module dump_tx #(
             11'd18: b = LOCAL_MAC[15:8];  11'd19: b = LOCAL_MAC[7:0];
             11'd20: b = 8'h08; 11'd21: b = 8'h00;
             11'd22: b = 8'h45; 11'd23: b = 8'h00;
-            11'd24: b = ip_total[15:8]; 11'd25: b = ip_total[7:0];
+            11'd24: b = ip_total_r[15:8]; 11'd25: b = ip_total_r[7:0];
             11'd26: b = 8'h00; 11'd27: b = 8'h00;
             11'd28: b = 8'h00; 11'd29: b = 8'h00;
             11'd30: b = 8'h40; 11'd31: b = 8'h11;
-            11'd32: b = ip_ck[15:8]; 11'd33: b = ip_ck[7:0];
+            11'd32: b = ip_ck_r[15:8]; 11'd33: b = ip_ck_r[7:0];
             11'd34: b = LOCAL_IP[31:24]; 11'd35: b = LOCAL_IP[23:16];
             11'd36: b = LOCAL_IP[15:8];  11'd37: b = LOCAL_IP[7:0];
             11'd38: b = dst_ip[31:24];   11'd39: b = dst_ip[23:16];
             11'd40: b = dst_ip[15:8];    11'd41: b = dst_ip[7:0];
             11'd42: b = CMD_PORT[15:8];  11'd43: b = CMD_PORT[7:0];
             11'd44: b = dst_port[15:8];  11'd45: b = dst_port[7:0];
-            11'd46: b = udp_len[15:8];   11'd47: b = udp_len[7:0];
+            11'd46: b = udp_len_r[15:8];   11'd47: b = udp_len_r[7:0];
             11'd48: b = 8'h00; 11'd49: b = 8'h00;
             // app header
             11'd50: b = 8'h47; 11'd51: b = 8'h46;
@@ -101,13 +99,13 @@ module dump_tx #(
             default: b = 8'h00;
         endcase
         // payload
-        if (idx >= idx_payload && idx < idx_fcs)
+        if (idx >= idx_payload && idx < idx_fcs_r)
             b = dbuf[word_idx][byte_idx*8 +: 8];
         // FCS
-        if (idx == idx_fcs)       b = ~crc_next[7:0];   // CRC lags one byte (crc_data pipeline)
-        if (idx == idx_fcs + 11'd1) b = ~crc[15:8];
-        if (idx == idx_fcs + 11'd2) b = ~crc[23:16];
-        if (idx == idx_fcs + 11'd3) b = ~crc[31:24];
+        if (idx == idx_fcs_r)       b = ~crc_next[7:0];   // CRC lags one byte (crc_data pipeline)
+        if (idx == idx_fcs1_r) b = ~crc[15:8];
+        if (idx == idx_fcs2_r) b = ~crc[23:16];
+        if (idx == idx_fcs3_r) b = ~crc[31:24];
     end
 
     crc32_eth_nib u_crc (
@@ -126,6 +124,8 @@ module dump_tx #(
         if (!rst_n) begin
             st <= S_IDLE; idx <= 0; ifg_cnt <= 0; crc_init <= 0;
             rd_idx <= 0; nwords_r <= 0; ram_raddr <= 0;
+            ip_total_r <= 0; udp_len_r <= 0; ip_ck_r <= 0;
+            idx_fcs_r <= 0; idx_fcs1_r <= 0; idx_fcs2_r <= 0; idx_fcs3_r <= 0; idx_end_r <= 0;
             gmii_tx_en <= 0; gmii_txd <= 0; done <= 0;
         end else begin
             done <= 0; crc_init <= 0;
@@ -134,6 +134,13 @@ module dump_tx #(
                     gmii_tx_en <= 0;
                     if (req) begin
                         nwords_r <= dump_nwords;
+                        ip_total_r <= {8'd0, dump_nwords} * 16'd8 + 16'd36;
+                        udp_len_r  <= {8'd0, dump_nwords} * 16'd8 + 16'd16;
+                        idx_fcs_r  <= 11'd58 + {{7'd0, dump_nwords} << 3};
+                        idx_fcs1_r <= 11'd59 + {{7'd0, dump_nwords} << 3};
+                        idx_fcs2_r <= 11'd60 + {{7'd0, dump_nwords} << 3};
+                        idx_fcs3_r <= 11'd61 + {{7'd0, dump_nwords} << 3};
+                        idx_end_r  <= 11'd62 + {{7'd0, dump_nwords} << 3};
                         rd_idx <= 0;
                         ram_raddr <= dump_start;
                         st <= S_RWAIT;
@@ -141,6 +148,7 @@ module dump_tx #(
                 end
                 S_RWAIT: begin
                     ram_raddr <= dump_start + 10'd1;
+                    ip_ck_r <= ip_ck;
                     st <= S_READ;
                 end
                 S_READ: begin
@@ -158,7 +166,7 @@ module dump_tx #(
                 S_TX: begin
                     gmii_tx_en <= 1;
                     gmii_txd <= b;
-                    if (idx == idx_end) begin
+                    if (idx == idx_end_r) begin
                         gmii_tx_en <= 0; done <= 1;
                         ifg_cnt <= 0; st <= S_IFG;
                     end else idx <= idx + 1;
