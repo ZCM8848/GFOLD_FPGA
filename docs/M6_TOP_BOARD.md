@@ -32,7 +32,8 @@
   一个 128-bit beat（地址 `word*8`，数据复制到高低 64 位）；
 - START 后 `drs_iter` 从 DDR2 读 boot image，写 COO/band 到外部存储，
   跑 50,000 轮；
-- 末轮 v[1099]（log final mass）和迭代号放在 DUMP 地址 0/1。
+- 末轮 v[1099]（log final mass）由 type 0x0B 查询返回 64 位值；
+  type 0x0C 返回 `{iter, run}`。
 
 ## 主机命令
 
