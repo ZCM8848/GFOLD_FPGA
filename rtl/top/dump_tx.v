@@ -1,5 +1,5 @@
-// dump_tx.v �?DUMP_DATA UDP 帧发送器（clk_125 域）
-// 预读最�?10 �?64 位字，发送一�?UDP/IP 帧�?`timescale 1ns/1ps
+// dump_tx.v �?DUMP_DATA UDP 帧发送器（clk_125 域）
+// 预读最�?10 �?64 位字，发送一�?UDP/IP 帧�?`timescale 1ns/1ps
 
 module dump_tx #(
     parameter [47:0] LOCAL_MAC = 48'h02_00_00_00_00_01,
@@ -35,7 +35,7 @@ module dump_tx #(
     reg [3:0]  ifg_cnt;
     reg        crc_init;
     reg [3:0]  rd_idx;      // 预读索引
-    reg [63:0] dbuf [0:9];
+    reg [63:0] dbuf [0:MAX_WORDS-1];
     reg [3:0]  nwords_r;
 
     assign busy = (st != S_IDLE);

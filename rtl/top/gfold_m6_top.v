@@ -61,7 +61,7 @@ module gfold_m6_top (
     wire f_start,f_byte_v,f_end,f_err; wire [7:0] f_data; wire [10:0] f_idx,f_len;
     eth_rx_mac u_rx_mac(.clk(I_rgmii_rxc),.rst_n(rst_rx_n),.gmii_rxd(rxd_gmii),.gmii_rx_dv(rx_dv),.gmii_rx_er(rx_er),.frame_start(f_start),.frame_data(f_data),.frame_idx(f_idx),.frame_byte_v(f_byte_v),.frame_end(f_end),.frame_len(f_len),.frame_err(f_err));
 
-    wire arp_req_rx,icmp_req_rx,udp_cmd_req_rx,dump_req_rx;
+    wire arp_req_rx,icmp_req_rx,udp_cmd_req_rx;
     wire [47:0] arp_mac_rx,icmp_mac_rx,udp_mac_rx;
     wire [31:0] arp_ip_rx,icmp_ip_rx,udp_ip_rx;
     wire [15:0] icmp_id_rx,icmp_seq_rx; wire [6:0] icmp_dlen_rx;
@@ -85,34 +85,31 @@ module gfold_m6_top (
         .rx_frame_cnt(rx_frame_cnt_rx),
         .fin_actual_crc(fin_actual_crc_rx),.fin_actual_words(fin_actual_words_rx),.fin_status(fin_status_rx),.img_valid(img_valid_rx),
         .img_wen(img_wen),.img_waddr(img_waddr),.img_wdata(img_wdata),
-        .img_base(img_base_rx),.img_nwords(img_nwords_rx),.img_start(img_start_rx),
-        .dump_req(dump_req_rx),.dump_start_out(dump_start_rx),.dump_nwords_out(dump_nwords_rx));
+        .img_base(img_base_rx),.img_nwords(img_nwords_rx),.img_start(img_start_rx)
+        );
 
     wire [6:0] ram_raddr; wire [7:0] ram_rdata;
     dc_ram_128x8 u_ram(.wclk(I_rgmii_rxc),.wen(ram_wen),.waddr(ram_waddr),.wdata(ram_wdata),.raddr(ram_raddr),.rdata(ram_rdata));
 
     // ---------------- CDC of command requests ----------------
-    reg arp_tog_rx,icmp_tog_rx,udp_tog_rx,dump_tog_rx;
+    reg arp_tog_rx,icmp_tog_rx,udp_tog_rx;
     always @(posedge I_rgmii_rxc or negedge rst_rx_n) begin
-        if(!rst_rx_n)begin arp_tog_rx<=0;icmp_tog_rx<=0;udp_tog_rx<=0;dump_tog_rx<=0; end
+        if(!rst_rx_n)begin arp_tog_rx<=0;icmp_tog_rx<=0;udp_tog_rx<=0; end
         else begin
             if(arp_req_rx)arp_tog_rx<=~arp_tog_rx;
             if(icmp_req_rx)icmp_tog_rx<=~icmp_tog_rx;
             if(udp_cmd_req_rx)udp_tog_rx<=~udp_tog_rx;
-            if(dump_req_rx)dump_tog_rx<=~dump_tog_rx;
         end
     end
-    reg [2:0] arp_tog_s,icmp_tog_s,udp_tog_s,dump_tog_s;
+    reg [2:0] arp_tog_s,icmp_tog_s,udp_tog_s;
     always @(posedge clk_125) begin
         arp_tog_s<={arp_tog_s[1:0],arp_tog_rx};
         icmp_tog_s<={icmp_tog_s[1:0],icmp_tog_rx};
         udp_tog_s<={udp_tog_s[1:0],udp_tog_rx};
-        dump_tog_s<={dump_tog_s[1:0],dump_tog_rx};
     end
     wire arp_req_tx=arp_tog_s[2]^arp_tog_s[1];
     wire icmp_req_tx=icmp_tog_s[2]^icmp_tog_s[1];
     wire udp_req_tx=udp_tog_s[2]^udp_tog_s[1];
-    wire dump_req_tx=dump_tog_s[2]^dump_tog_s[1];
 
     // ---------------- solver arming / image RAM ----------------
     reg solver_armed;
@@ -274,37 +271,27 @@ module gfold_m6_top (
     end
     reg [2:0] mass_sync;
     reg       mass_seen;
-    reg [63:0] dump_ram_rdata;
-    reg [63:0] mass_ram [0:15];
-    wire [9:0] dump_ram_raddr;
+    reg [63:0] mass_125;
     always @(posedge clk_125 or negedge rst_125_n) begin
         if (!rst_125_n) begin
-            mass_sync <= 3'd0; mass_seen <= 1'b0;
-            dump_ram_rdata <= 64'd0;
-            mass_ram[0] <= 64'd0;
-            mass_ram[1] <= 64'd0;
+            mass_sync <= 3'd0; mass_seen <= 1'b0; mass_125 <= 64'd0;
         end else begin
             mass_sync <= {mass_sync[1:0], mass_tog};
             if (mass_sync[2] ^ mass_seen) begin
                 mass_seen <= mass_sync[2];
-                mass_ram[0] <= mass_sol;
-                mass_ram[1] <= {48'd0, iter_r};
+                mass_125 <= mass_sol;
             end
-            dump_ram_rdata <= mass_ram[dump_ram_raddr[3:0]];
         end
     end
 
     // ---------------- TX side ----------------
-    reg [47:0] arp_mac_125,icmp_mac_125,udp_mac_125,dump_mac_125;
-    reg [31:0] arp_ip_125,icmp_ip_125,udp_ip_125,dump_ip_125;
+    reg [47:0] arp_mac_125,icmp_mac_125,udp_mac_125;
+    reg [31:0] arp_ip_125,icmp_ip_125,udp_ip_125;
     reg [15:0] icmp_id_125,icmp_seq_125;
     reg [6:0] icmp_dlen_125;
     reg [15:0] udp_port_125,udp_seq_125;
     reg [7:0] udp_ack_type_r;
     reg [31:0] udp_payload_w0_r,udp_payload_w1_r;
-    reg [15:0] dump_port_125;
-    reg [9:0] dump_start_125;
-    reg [3:0] dump_nwords_125;
     reg solver_done_s1,solver_done_s2;
     always @(posedge clk_125) begin solver_done_s1<=solver_done; solver_done_s2<=solver_done_s1; end
 
@@ -318,24 +305,22 @@ module gfold_m6_top (
                 8'h01:begin udp_ack_type_r<=8'h02; udp_payload_w0_r<={16'd0,udp_app_seq_rx}; udp_payload_w1_r<={31'd0,img_valid_rx}; end
                 8'h03:begin udp_ack_type_r<=8'h04; udp_payload_w0_r<=fin_actual_crc_rx; udp_payload_w1_r<={fin_actual_words_rx[15:8],fin_actual_words_rx[7:0],8'd0,fin_status_rx}; end
                 8'h05:begin udp_ack_type_r<=8'h02; udp_payload_w0_r<={16'd0,udp_app_seq_rx}; udp_payload_w1_r<={31'd0,solver_armed}; end
+                8'h0B:begin udp_ack_type_r<=8'h02; udp_payload_w0_r<=mass_125[31:0]; udp_payload_w1_r<=mass_125[63:32]; end
+                8'h0C:begin udp_ack_type_r<=8'h02; udp_payload_w0_r<={16'd0,iter_r}; udp_payload_w1_r<={31'd0,run}; end
                 8'h09:begin udp_ack_type_r<=8'h02; udp_payload_w0_r<={16'd0,udp_app_seq_rx}; udp_payload_w1_r<=32'd0; end
                 default:begin udp_ack_type_r<=8'h02; udp_payload_w0_r<={16'd0,udp_app_seq_rx}; udp_payload_w1_r<=32'd0; end
             endcase
-        end
-        if(dump_req_tx) begin
-            dump_mac_125<=udp_mac_rx; dump_ip_125<=udp_ip_rx; dump_port_125<=udp_src_port_rx;
-            dump_start_125<=dump_start_rx; dump_nwords_125<=dump_nwords_rx;
         end
     end
 
     wire arp_start,icmp_start,udp_start,dump_start;
     wire arp_busy,icmp_busy,udp_busy,dump_busy;
     wire arp_done,icmp_done,udp_done,dump_done;
-    wire [7:0] arp_txd,icmp_txd,udp_txd,dump_txd;
-    wire arp_en,icmp_en,udp_en,dump_en;
+    wire [7:0] arp_txd,icmp_txd,udp_txd;
+    wire arp_en,icmp_en,udp_en;
 
     tx_arbiter u_arb(.clk(clk_125),.rst_n(rst_125_n),
-        .arp_req(arp_req_tx),.icmp_req(icmp_req_tx),.udp_req(udp_req_tx),.dump_req(dump_req_tx),
+        .arp_req(arp_req_tx),.icmp_req(icmp_req_tx),.udp_req(udp_req_tx),.dump_req(1'b0),
         .arp_start(arp_start),.icmp_start(icmp_start),.udp_start(udp_start),.dump_start(dump_start),
         .arp_busy(arp_busy),.icmp_busy(icmp_busy),.udp_busy(udp_busy),.dump_busy(dump_busy),.tx_busy());
 
@@ -348,11 +333,8 @@ module gfold_m6_top (
     udp_reply_tx #(.LOCAL_MAC(48'h02_00_00_00_00_01),.LOCAL_IP(32'hC0A8_01C8),.CMD_PORT(16'd4661)) u_udp_tx(
         .clk(clk_125),.rst_n(rst_125_n),.req(udp_start),.dst_mac(udp_mac_125),.dst_ip(udp_ip_125),.dst_port(udp_port_125),.ack_type(udp_ack_type_r),.ack_seq(udp_seq_125),.payload_w0(udp_payload_w0_r),.payload_w1(udp_payload_w1_r),.busy(udp_busy),.done(udp_done),.gmii_txd(udp_txd),.gmii_tx_en(udp_en));
 
-    dump_tx #(.LOCAL_MAC(48'h02_00_00_00_00_01),.LOCAL_IP(32'hC0A8_01C8),.CMD_PORT(16'd4661)) u_dump_tx(
-        .clk(clk_125),.rst_n(rst_125_n),.req(dump_start),.dst_mac(dump_mac_125),.dst_ip(dump_ip_125),.dst_port(dump_port_125),.dump_start(dump_start_125),.dump_nwords(dump_nwords_125),.ram_raddr(dump_ram_raddr),.ram_rdata(dump_ram_rdata),.busy(dump_busy),.done(dump_done),.gmii_txd(dump_txd),.gmii_tx_en(dump_en));
-
-    wire [7:0] gmii_txd = arp_busy?arp_txd:(icmp_busy?icmp_txd:(udp_busy?udp_txd:dump_txd));
-    wire gmii_tx_en = arp_busy?arp_en:(icmp_busy?icmp_en:(udp_busy?udp_en:dump_en));
+    wire [7:0] gmii_txd = arp_busy?arp_txd:(icmp_busy?icmp_txd:udp_txd);
+    wire gmii_tx_en = arp_busy?arp_en:(icmp_busy?icmp_en:udp_en);
 
     rgmii_tx_phy u_rgmii_tx(.clk_125(clk_125),.clk_125_90(clk_125),.rst(~rst_125_n),.gmii_txd(gmii_txd),.gmii_tx_en(gmii_tx_en),.gmii_tx_er(1'b0),.rgmii_txc(O_rgmii_txc),.rgmii_tx_ctl(O_rgmii_tx_ctl),.rgmii_txd(O_rgmii_txd));
 

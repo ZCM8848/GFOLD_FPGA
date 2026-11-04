@@ -200,6 +200,24 @@ def _dump_words(sock, start, nwords):
 def _d(u):
     return struct.unpack('>d', struct.pack('>Q', u & 0xFFFFFFFFFFFFFFFF))[0]
 
+def _query8(sock, typ, seq=1, timeout=3.0):
+    sock.sendto(make_header(typ, seq=seq), (FPGA_IP, PORT))
+    sock.settimeout(timeout)
+    data, _ = sock.recvfrom(2048)
+    hdr = parse_header(data)
+    if not hdr or hdr[1] != 0x02 or len(data) < 16:
+        raise RuntimeError(f"bad ACK for type 0x{typ:02X}")
+    return data[8:16]
+
+def _mass_req(sock):
+    p = _query8(sock, 0x0B)
+    return struct.unpack('<Q', p)[0]
+
+def _status_req(sock):
+    p = _query8(sock, 0x0C)
+    w0, w1 = struct.unpack('<II', p)
+    return w0 & 0xFFFF, w1 & 0x1
+
 def cmd_check(image_path, wait=0.5):
     if not cmd_load(image_path):
         print("load failed"); return False
@@ -239,11 +257,14 @@ def cmd_check(image_path, wait=0.5):
     return ok
 
 def cmd_mass():
-    words = cmd_dump(0, 2)
-    if not words:
-        return False
-    raw = words[0]
-    it = words[1] & 0xFFFF if len(words) > 1 else -1
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(('0.0.0.0', PORT))
+    try:
+        raw = _mass_req(sock)
+        it, _ = _status_req(sock)
+    except Exception as e:
+        print(f"mass query failed: {e}"); sock.close(); return False
+    sock.close()
     val = _d(raw)
     print(f"MASS iter={it} raw=0x{raw:016X} log={val:.12g} exp={pow(2.718281828459045, val):.6f}")
     return True
@@ -257,13 +278,13 @@ def cmd_run(image_path, timeout=7200, poll=10):
     t0 = time.time()
     while time.time() - t0 < timeout:
         try:
-            words = _dump_words(sock, 0, 2)
+            it, running = _status_req(sock)
+            raw = _mass_req(sock)
         except Exception as e:
-            print(f"  status dump failed: {e}"); time.sleep(poll); continue
-        raw = words[0]
-        it = words[1] & 0xFFFF if len(words) > 1 else -1
+            print(f"  status query failed: {e}"); time.sleep(poll); continue
         val = _d(raw)
-        print(f"  t={time.time()-t0:7.1f}s iter={it} raw=0x{raw:016X} log={val:.9g}")
+        print(f"  t={time.time()-t0:7.1f}s iter={it} run={running} "
+              f"raw=0x{raw:016X} log={val:.9g}")
         if it >= 49999:
             print(f"RUN COMPLETE iter={it} final_mass_log={val:.12g} "
                   f"final_mass={pow(2.718281828459045, val):.6f}")
