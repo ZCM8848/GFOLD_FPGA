@@ -7,7 +7,11 @@
 | Bit | 用途 | SHA256 |
 |---|---|---|
 | `anlogic/td_project/phy_ddr2_sram/gfold_ddr2_sram.bit` | DDR2 64-bit 字映射自检 | `3A72B1BCF4C108E6ECD6D58196DB9F29701DF891F5CB1FD926E2F11E20EAF3F9` |
-| `anlogic/td_project/phy_m6/gfold_m6.bit` | 完整问题 ETH+DDR2 求解 | 生成后补 |
+| `anlogic/td_project/phy_m6/gfold_m6.bit` | 完整问题 ETH+DDR2 求解 | `81834B786348FCC82977DECA5EAB3C8430D1090CB6724559269C3E592EFB2106` |
+
+完整 bit：1,789,533 B；slice 17,857/21,216（84.2%），ERAM 104/108，
+DSP 40/40；setup WNS **+0.118 ns**，hold 仅有 RGMII RX 输入 -0.422 ns
+（INDEL=4 未被 STA 建模，M5 同样报告，板级正常）。
 
 ## DDR2 字映射自检（先烧）
 
