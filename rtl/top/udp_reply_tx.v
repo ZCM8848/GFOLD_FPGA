@@ -1,8 +1,8 @@
-// udp_reply_tx.v — UDP ACK 帧发送器（clk_125 域）
+// udp_reply_tx.v �?UDP ACK 帧发送器（clk_125 域）
 //
-// 收到 req 脉冲后发送一个 72 字节帧（含前导码）：
-//   Eth + IPv4(total=44) + UDP(len=24) + 应用头(8) + payload(8) + pad(2) + FCS(4)
-//   = 14 + 44 + 2 + 4 = 64 字节（最小帧）+ 前导码 8 = 72
+// 收到 req 脉冲后发送一�?72 字节帧（含前导码）：
+//   Eth + IPv4(total=44) + UDP(len=24) + 应用�?8) + payload(8) + pad(2) + FCS(4)
+//   = 14 + 44 + 2 + 4 = 64 字节（最小帧�? 前导�?8 = 72
 //
 // payload = {u32 rx_frame_count, u32 link_status}（小端）
 //
@@ -50,6 +50,7 @@ module udp_reply_tx #(
     wire [16:0] ip_f1  = ip_sum[15:0] + ip_sum[31:16];
     wire [16:0] ip_f2  = ip_f1[15:0] + {16'd0, ip_f1[16]};
     wire [15:0] ip_ck  = ~ip_f2[15:0];
+    reg  [15:0] ip_ck_r;
 
     // CRC
     wire [31:0] crc;
@@ -88,8 +89,8 @@ module udp_reply_tx #(
             7'd29 : b = 8'h00;
             7'd30 : b = 8'h40;       // TTL 64
             7'd31 : b = 8'h11;       // UDP
-            7'd32 : b = ip_ck[15:8];
-            7'd33 : b = ip_ck[7:0];
+            7'd32 : b = ip_ck_r[15:8];
+            7'd33 : b = ip_ck_r[7:0];
             7'd34 : b = LOCAL_IP[31:24];
             7'd35 : b = LOCAL_IP[23:16];
             7'd36 : b = LOCAL_IP[15:8];
@@ -107,7 +108,7 @@ module udp_reply_tx #(
             7'd47 : b = 8'h18;
             7'd48 : b = 8'h00;            // checksum = 0
             7'd49 : b = 8'h00;
-            // 应用头
+            // 应用�?
             7'd50 : b = 8'h47;            // magic hi
             7'd51 : b = 8'h46;            // magic lo
             7'd52 : b = ack_type;
@@ -125,7 +126,7 @@ module udp_reply_tx #(
             7'd63 : b = payload_w1[15:8];
             7'd64 : b = payload_w1[23:16];
             7'd65 : b = payload_w1[31:24];
-            // padding（66-67 = 0x00, default 已覆盖）
+            // padding�?6-67 = 0x00, default 已覆盖）
             default: b = 8'h00;
         endcase
 
@@ -159,6 +160,7 @@ module udp_reply_tx #(
             gmii_txd   <= 8'h00;
             done       <= 1'b0;
             crc_init   <= 1'b0;
+            ip_ck_r    <= 16'h0;
         end else begin
             done     <= 1'b0;
             crc_init <= 1'b0;
@@ -170,6 +172,7 @@ module udp_reply_tx #(
                         gmii_txd   <= b;
                         idx        <= 7'd1;
                         crc_init   <= 1'b1;
+                        ip_ck_r    <= ip_ck;
                         st         <= S_TX;
                     end
                 end

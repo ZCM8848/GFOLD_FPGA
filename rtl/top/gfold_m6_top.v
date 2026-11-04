@@ -220,11 +220,11 @@ module gfold_m6_top (
 
     wire [19:0] boot_waddr;
     wire solver_done, solver_idle, band_ready;
-    wire [15:0] iter_cnt;
     wire [3:0] verb;
     wire [63:0] scale_cur_out, tau_out;
     reg [15:0] iter_r;
     reg run;
+    wire refactor_sol = (iter_r == 16'd0);
 
     assign boot_addr = {2'b0, boot_waddr[15:0]};
     // boot_req -> arbiter, boot_busy/rdata -> drs_iter
@@ -237,7 +237,7 @@ module gfold_m6_top (
         .EXT_WS(1), .EXT_COEF(1), .MEM_IF(1), .NODE(100)
     ) u_solver (
         .clk(clk_sol), .rst_n(rst_sol_sync_n), .start(run),
-        .refactor(1'b1), .band_in(64'd0), .band_valid(1'b0),
+        .refactor(refactor_sol), .band_in(64'd0), .band_valid(1'b0),
         .iter(iter_r), .scale_valid(1'b0), .scale_r(64'h3FF0000000000000),
         .ram_addr(dmem_addr), .ram_wdata(dmem_wdata), .ram_we(dmem_we), .ram_rdata(dmem_rdata),
         .kkt_addr(kkt_addr), .kkt_wdata(kkt_wdata), .kkt_we(kkt_we), .kkt_rdata(kkt_rdata),

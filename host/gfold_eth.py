@@ -55,7 +55,7 @@ def cmd_load(image_path=None):
     sock.settimeout(1.0)
     try: sock.recvfrom(2048)
     except: pass
-    time.sleep(0.5)
+    time.sleep(1.0)
     print(f"LOAD {npkts} pkts...")
     for seq in range(npkts):
         nw = wpk if seq < nfull else last
@@ -128,7 +128,7 @@ def cmd_loadtest():
     sock.settimeout(1.0)
     try: sock.recvfrom(2048)
     except: pass
-    time.sleep(0.5)
+    time.sleep(1.0)
     # LOAD 5 packets
     for seq in range(5):
         pkt = make_header(0x01, seq=seq, nwords=180) + image[seq*1440:(seq+1)*1440]
@@ -248,6 +248,32 @@ def cmd_mass():
     print(f"MASS iter={it} raw=0x{raw:016X} log={val:.12g} exp={pow(2.718281828459045, val):.6f}")
     return True
 
+def cmd_run(image_path, timeout=7200, poll=10):
+    if not cmd_load(image_path):
+        print("load failed"); return False
+    cmd_start()
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(('0.0.0.0', PORT))
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        try:
+            words = _dump_words(sock, 0, 2)
+        except Exception as e:
+            print(f"  status dump failed: {e}"); time.sleep(poll); continue
+        raw = words[0]
+        it = words[1] & 0xFFFF if len(words) > 1 else -1
+        val = _d(raw)
+        print(f"  t={time.time()-t0:7.1f}s iter={it} raw=0x{raw:016X} log={val:.9g}")
+        if it >= 49999:
+            print(f"RUN COMPLETE iter={it} final_mass_log={val:.12g} "
+                  f"final_mass={pow(2.718281828459045, val):.6f}")
+            sock.close()
+            return True
+        time.sleep(poll)
+    sock.close()
+    print("run timeout")
+    return False
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else 'ping'
     if cmd == 'ping':
@@ -266,13 +292,19 @@ def main():
         cmd_start()
     elif cmd == 'mass':
         sys.exit(0 if cmd_mass() else 1)
+    elif cmd == 'run50k':
+        p = sys.argv[2] if len(sys.argv) > 2 else os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "rtl", "data", "flash", "flash_image.bin")
+        t = float(sys.argv[3]) if len(sys.argv) > 3 else 7200
+        sys.exit(0 if cmd_run(p, t) else 1)
     elif cmd == 'check':
         p = sys.argv[2] if len(sys.argv) > 2 else os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "..", "rtl", "data", "kkt", "small2", "flash_image.bin")
         w = float(sys.argv[3]) if len(sys.argv) > 3 else 0.5
         sys.exit(0 if cmd_check(p, w) else 1)
     else:
-        print("commands: ping [n] | load [path] | dump [start] [n] | loadtest | start | mass | check [image.bin] [wait_s]")
+        print("commands: ping [n] | load [path] | dump [start] [n] | loadtest | start | mass | "
+              "run50k [image.bin] [timeout_s] | check [image.bin] [wait_s]")
         sys.exit(1)
 
 if __name__ == '__main__':
