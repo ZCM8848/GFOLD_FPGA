@@ -158,7 +158,7 @@ module ddr2_sram_ctrl (
             end
             D_RDATA: begin
                 if (mc_rd_data_valid) begin
-                    rdata_ddr <= mc_rd_data;
+                    rdata_ddr <= mc_rd_data[63:0];
                     ack_tog_ddr <= ~ack_tog_ddr;
                     dst <= D_IDLE;
                 end
@@ -168,11 +168,14 @@ module ddr2_sram_ctrl (
         end
     end
 
-    assign mc_addr = (dst == D_RREQ || dst == D_RWAIT || dst == D_RDATA) ? addr_r : addr_r;
+    // Each 64-bit client word occupies one 128-bit AXI beat (stride 8 in the
+    // MC's 16-bit address units). Replicate the 64-bit word into both halves
+    // so the result is independent of byte-lane mapping; reads use the low half.
+    assign mc_addr = {addr_r[21:0], 3'b0};
     assign mc_cmd  = (dst == D_RREQ || dst == D_RWAIT || dst == D_RDATA) ? 3'd1 : 3'd0;
     assign mc_en   = (dst == D_RREQ || dst == D_RWAIT) ? ar_en :
                      (dst == D_WREQ || dst == D_WWAIT) ? aw_en : 1'b0;
-    assign mc_wdf_data = wdata_r;
+    assign mc_wdf_data = {wdata_r, wdata_r};
     assign mc_wdf_end  = (dst == D_WREQ || dst == D_WWAIT) && w_en;
     assign mc_wdf_mask = 16'h0;
     assign mc_wdf_wren = (dst == D_WREQ || dst == D_WWAIT) && w_en;
